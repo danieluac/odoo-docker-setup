@@ -1,0 +1,76 @@
+# ═════════════════════════════════════════════════════════════════════
+# Odoo · docker compose — NÃO editar valores aqui.
+#
+# TODA a configuração vem do .env (criado por `make` a partir do
+# .env.example). O ponto de entrada é sempre o Makefile:
+#
+#     make up        # sobe tudo
+#     make help      # todos os comandos
+#
+# Ficheiros opcionais, incluídos automaticamente pelo Makefile:
+#   docker-compose.pg-tuning.yml   quando PG_TUNING=1 no .env
+#   docker-compose.enterprise.yml  quando ENTERPRISE_DIR definido no .env
+# ═════════════════════════════════════════════════════════════════════
+
+services:
+  db:
+    # postgres + extensão pgvector (inofensiva em Community, necessária p/ IA)
+    image: pgvector/pgvector:pg${POSTGRES_VERSION:?define POSTGRES_VERSION no .env — corre `make init`}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?define POSTGRES_USER no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -q"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  odoo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ODOO_VERSION: ${ODOO_VERSION:?define ODOO_VERSION no .env — corre `make init`}
+    image: odoo-custom:${ODOO_VERSION}
+    # --database/--db-filter amarram o servidor à BD activa (ODOO_DB no .env;
+    # o make restore/db-use actualizam-na automaticamente).
+    # ODOO_DEBUG=1 (via `make debug` ou .env) → arranca sob debugpy à escuta
+    # em :5678 (attach do VS Code); ODOO_WAIT=1 → espera o VS Code antes de
+    # arrancar (útil para debugar o próprio boot).
+    command: >
+      ${ODOO_DEBUG:+python3 -m debugpy --listen 0.0.0.0:5678 ${ODOO_WAIT:+--wait-for-client} /usr/bin/}odoo
+      --dev=${ODOO_DEV:?define ODOO_DEV no .env (usa "none" para desactivar)}
+      --log-level=${ODOO_LOG:?define ODOO_LOG no .env}
+      --database ${ODOO_DB:?define ODOO_DB no .env}
+      --db-filter=^${ODOO_DB}$$
+    environment:
+      HOST: db
+      USER: ${POSTGRES_USER}
+      PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # módulos custom: pasta addons/ do repo, editada no host e vista no container
+      - ./addons:/mnt/extra-addons
+      # odoo.conf gerado pelo make a partir do .env
+      - ./config:/etc/odoo:ro
+      # utilitário interno de backup/restore (usado pelo Makefile)
+      - ./scripts:/mnt/scripts:ro
+      # filestore + sessões persistem neste volume
+      - odoo-data:/var/lib/odoo
+    ports:
+      - "${ODOO_PORT:?define ODOO_PORT no .env}:8069"
+      # porta do debugpy (só é usada quando ODOO_DEBUG=1 — make debug)
+      - "${ODOO_DEBUG_PORT:?define ODOO_DEBUG_PORT no .env}:5678"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+# sem `name:` fixo — o Makefile passa `-p odoo-<versão>`, por isso cada
+# versão do Odoo tem containers e volumes próprios (ambientes isolados)
+volumes:
+  pgdata:
+  odoo-data:

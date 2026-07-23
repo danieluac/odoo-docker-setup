@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── Setup Odoo Docker ────────────────────────────────────────────────
+# backups locais (podem ter GBs e dados sensíveis)
+backups/*
+!backups/.gitkeep
+# odoo.conf é gerado pelo make a partir do .env
+config/*
+!config/.gitkeep
