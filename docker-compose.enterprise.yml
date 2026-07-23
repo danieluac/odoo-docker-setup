@@ -1,0 +1,13 @@
+# Incluído automaticamente pelo Makefile quando ENTERPRISE_DIR está
+# definido no .env. create_host_path:false → se o caminho não existir,
+# FALHA com erro claro em vez de montar uma pasta vazia (senão os módulos
+# enterprise ficavam silenciosamente indisponíveis).
+services:
+  odoo:
+    volumes:
+      - type: bind
+        source: ${ENTERPRISE_DIR}
+        target: /mnt/enterprise
+        read_only: true
+        bind:
+          create_host_path: false
