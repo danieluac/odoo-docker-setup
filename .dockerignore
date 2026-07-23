@@ -1,0 +1,4 @@
+# o build da imagem só precisa do requirements.txt — tudo o resto fica fora
+# do contexto (backups e addons podem ser enormes)
+*
+!requirements.txt
