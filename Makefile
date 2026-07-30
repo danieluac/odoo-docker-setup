@@ -83,6 +83,7 @@ help:  ## Mostra esta ajuda
 	@printf "  make backup                            # backup da BD activa com filestore → backups/\n"
 	@printf "  make backup DB=outra FILESTORE=0       # backup doutra BD, sem filestore\n"
 	@printf "  make restore FILE=backups/prod.zip     # restaura; a BD 'prod' fica activa\n"
+	@printf "  make scaffold MODULE=minha_app         # cria a estrutura de um módulo novo em addons/\n"
 	@printf "  make debug                             # sobe com debugpy em :5678 (attach do VS Code)\n"
 	@printf "\n$(C_DIM)Configuração (versão do Odoo, porta, credenciais…): edita o .env e corre make up$(C_RESET)\n"
 
@@ -114,6 +115,71 @@ check-env: init
 		fi
 	done
 	[ $$missing -eq 0 ] || { printf "$(C_DIM)  compara o teu .env com o .env.example$(C_RESET)\n"; exit 1; }
+
+# ── Templates do make scaffold (placeholders @X@ substituídos na receita) ──
+define SCAFFOLD_MANIFEST
+{
+    'name': '@TITLE@',
+    'summary': 'Resumo curto do que o módulo faz',
+    'description': """
+Descrição longa do módulo @MODULE@.
+""",
+    'author': '@AUTHOR@',
+    'website': '@WEBSITE@',
+    'contributors': [@CONTRIB@],
+    'category': 'Uncategorized',
+    'version': '@VERSION@',
+    'license': 'LGPL-3',
+    'depends': ['base'],
+    'data': [
+        'security/ir.model.access.csv',
+        'views/views.xml',
+    ],
+    'application': False,
+    'installable': True,
+}
+endef
+export SCAFFOLD_MANIFEST
+
+define SCAFFOLD_MODELS
+from odoo import models, fields  # noqa: F401
+
+
+# Exemplo de modelo — descomenta e adapta:
+#
+# class @CLASS@(models.Model):
+#     _name = '@MODULE@.@MODULE@'
+#     _description = '@TITLE@'
+#
+#     name = fields.Char(string='Nome', required=True)
+endef
+export SCAFFOLD_MODELS
+
+define SCAFFOLD_VIEWS
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Vistas, menus e acções do módulo @MODULE@.
+         Exemplo de acção + menu (descomenta e adapta):
+
+    <record id="action_@MODULE@" model="ir.actions.act_window">
+        <field name="name">@TITLE@</field>
+        <field name="res_model">@MODULE@.@MODULE@</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+    <menuitem id="menu_@MODULE@" name="@TITLE@" action="action_@MODULE@"/>
+    -->
+</odoo>
+endef
+export SCAFFOLD_VIEWS
+
+define SCAFFOLD_README
+# @TITLE@
+
+Descrição do módulo @MODULE@.
+
+Instalação no ambiente: `make install MODULE=@MODULE@`
+endef
+export SCAFFOLD_README
 
 # odoo.conf — derivado do .env, regenerado em cada make up (não editar)
 define ODOO_CONF_CONTENT
@@ -365,3 +431,55 @@ update: guard check-env conf ensure-image  ## Actualiza módulo(s): MODULE=a,b,c
 	$(RUN_ODOO) odoo -d $(DB) -u $(MODULE) --stop-after-init --log-level info
 	$(COMPOSE) restart odoo 2>/dev/null || true
 	printf "$(C_GREEN)✓ módulo(s) $(MODULE) actualizado(s) na BD $(DB)$(C_RESET)\n"
+
+.PHONY: scaffold
+scaffold: init  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_do_modulo)
+	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make scaffold MODULE=<nome_do_modulo>$(C_RESET) $(C_DIM)(minúsculas e _, ex.: minha_app)$(C_RESET)\n"; exit 1; }
+	echo "$(MODULE)" | grep -qE '^[a-z][a-z0-9_]*$$' || { printf "$(C_RED)✗ nome inválido: usa minúsculas, números e _ (ex.: minha_app)$(C_RESET)\n"; exit 1; }
+	DIR=$(ROOT_DIR)/addons/$(MODULE)
+	test ! -e "$$DIR" || { printf "$(C_RED)✗ addons/$(MODULE) já existe$(C_RESET)\n"; exit 1; }
+	# garante a identidade no .env (acrescenta os defaults se as chaves faltarem,
+	# p.ex. num .env criado por uma versão anterior do setup)
+	for kv in "MODULE_AUTHOR=A Minha Empresa" "MODULE_WEBSITE=https://www.example.com" "MODULE_CONTRIBUTORS="; do
+		k=$${kv%%=*}
+		if ! grep -qE "^[[:space:]]*$$k[[:space:]]*=" $(ENV_FILE); then
+			echo "$$kv" >> $(ENV_FILE)
+			printf "$(C_YELL)! $$k acrescentado ao .env com o valor por omissão — edita-o$(C_RESET)\n"
+		fi
+	done
+	AUTHOR="$$(sed -nE 's/^[[:space:]]*MODULE_AUTHOR[[:space:]]*=[[:space:]]*//p' $(ENV_FILE) | tail -1)"
+	WEBSITE="$$(sed -nE 's/^[[:space:]]*MODULE_WEBSITE[[:space:]]*=[[:space:]]*//p' $(ENV_FILE) | tail -1)"
+	CONTRIB="$$(sed -nE 's/^[[:space:]]*MODULE_CONTRIBUTORS[[:space:]]*=[[:space:]]*//p' $(ENV_FILE) | tail -1)"
+	# "Ana, Rui" → 'Ana', 'Rui' (lista python no manifesto)
+	if [ -n "$$CONTRIB" ]; then
+		CONTRIB_PY="'$$(echo "$$CONTRIB" | sed -E "s/[[:space:]]*,[[:space:]]*/', '/g")'"
+	else
+		CONTRIB_PY=""
+	fi
+	# minha_app → "Minha App" (nome apresentável) e "MinhaApp" (classe python)
+	TITLE="$$(echo "$(MODULE)" | awk -F_ '{for(i=1;i<=NF;i++){$$i=toupper(substr($$i,1,1)) substr($$i,2)}}1')"
+	CLASS="$$(echo "$$TITLE" | tr -d ' ')"
+	VERSION="$$( [ -n "$(ODOO_VERSION)" ] && echo "$(ODOO_VERSION)" || echo 17.0 ).1.0.0"
+	# substitui os placeholders @X@ dos templates (bash puro — sem problemas de escaping)
+	render() {
+		local t="$$1"
+		t="$${t//@MODULE@/$(MODULE)}"
+		t="$${t//@TITLE@/$$TITLE}"
+		t="$${t//@CLASS@/$$CLASS}"
+		t="$${t//@AUTHOR@/$$AUTHOR}"
+		t="$${t//@WEBSITE@/$$WEBSITE}"
+		t="$${t//@CONTRIB@/$$CONTRIB_PY}"
+		t="$${t//@VERSION@/$$VERSION}"
+		printf '%s\n' "$$t"
+	}
+	mkdir -p "$$DIR/models" "$$DIR/views" "$$DIR/security"
+	render "$$SCAFFOLD_MANIFEST" > "$$DIR/__manifest__.py"
+	echo "from . import models" > "$$DIR/__init__.py"
+	echo "from . import models" > "$$DIR/models/__init__.py"
+	render "$$SCAFFOLD_MODELS" > "$$DIR/models/models.py"
+	render "$$SCAFFOLD_VIEWS" > "$$DIR/views/views.xml"
+	echo "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink" > "$$DIR/security/ir.model.access.csv"
+	render "$$SCAFFOLD_README" > "$$DIR/README.md"
+	printf "$(C_GREEN)✓ módulo criado em addons/$(MODULE)$(C_RESET)\n"
+	printf "$(C_DIM)  autor: $$AUTHOR · website: $$WEBSITE · versão: $$VERSION$(C_RESET)\n"
+	printf "$(C_DIM)  próximo passo: make install MODULE=$(MODULE)$(C_RESET)\n"
