@@ -118,7 +118,28 @@ make neutralize DB=x     # desliga crons/email numa BD (cópias de produção)
 
 ### Módulos custom
 
-Coloca os teus módulos na pasta `addons/` e:
+Para criar um módulo novo do zero:
+
+```bash
+make scaffold MODULE=minha_app
+```
+
+Isto cria a estrutura completa em `addons/minha_app/` (`__manifest__.py`,
+`models/`, `views/`, `security/`, `README.md`), com o manifesto já
+preenchido com o **autor**, o **website** e os **contribuidores** definidos
+no `.env`:
+
+```ini
+MODULE_AUTHOR=A Minha Empresa
+MODULE_WEBSITE=https://www.example.com
+MODULE_CONTRIBUTORS=Ana Silva, Rui Costa
+```
+
+A versão do manifesto segue a versão do ambiente (ex.: `17.0.1.0.0`). Se
+estas chaves não existirem no teu `.env` (criado por uma versão anterior do
+setup), são acrescentadas automaticamente com valores por omissão.
+
+Módulos existentes: coloca-os na pasta `addons/` e:
 
 ```bash
 make install MODULE=meu_modulo     # instala (aceita vários: a,b,c)
@@ -167,6 +188,7 @@ e corre `make up`. Vazio = modo Community.
 | `ODOO_DEBUG` / `ODOO_WAIT` | — | Debug permanente / esperar pelo VS Code |
 | `ENTERPRISE_DIR` | vazio | Caminho dos addons Enterprise (vazio = Community) |
 | `BACKUP_DIR` | `./backups` | Pasta dos backups |
+| `MODULE_AUTHOR` / `MODULE_WEBSITE` / `MODULE_CONTRIBUTORS` | genéricos | Identidade usada no manifesto do `make scaffold` |
 | `PG_TUNING` | `1` | Postgres afinado p/ dev (restores rápidos; nunca em produção) |
 
 O `.env` nunca é regenerado — é teu. A precedência é simples: **tudo vem do
