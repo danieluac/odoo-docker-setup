@@ -172,7 +172,86 @@ ENTERPRISE_DIR=../enterprise-17.0
 
 e corre `make up`. Vazio = modo Community.
 
-## 7. Variáveis do `.env`
+## 7. Migrar de versão (ex.: 16 → 17 → 18)
+
+Primeiro, o que o Odoo permite e o que não permite — para não haver surpresas:
+
+| O quê | É possível? | Como |
+|---|---|---|
+| Migrar a **base de dados** (Community) | Sim, uma versão de cada vez | `make migrate` (OpenUpgrade, da OCA) |
+| Migrar a **base de dados** com módulos Enterprise | Sim, só via Odoo | `make migrate-odoo` (serviço oficial, requer contrato Enterprise) |
+| Migrar o **código dos módulos custom** | Em parte — a parte mecânica | `make migrate-module` (odoo-module-migrator, da OCA) + revisão manual |
+| Voltar atrás (downgrade) | Não | usa o backup que o `make migrate` deixa antes de cada passo |
+
+O Odoo Community **não migra bases de dados entre versões sozinho** — o
+OpenUpgrade é a solução open-source da comunidade e funciona passo a passo
+(16→17→18); o `make migrate` encadeia os passos por ti.
+
+### 7.1 Migrar o código dos módulos custom (fazer PRIMEIRO)
+
+```bash
+make migrate-module MODULE=minha_app TO=18.0          # da versão do .env para a 18.0
+make migrate-module MODULE=minha_app FROM=16.0 TO=17.0
+```
+
+Corre o `odoo-module-migrator` sobre `addons/minha_app` **no lugar** (faz
+commit antes!). Ele trata do que é mecânico: versão no manifesto, ficheiros
+renomeados e substituições conhecidas de cada versão. O que fica para ti está
+no log em `migrations/` e no diff — tipicamente:
+
+- **17.0**: `attrs="..."` e `states="..."` nas vistas passam a expressões
+  (`invisible="state != 'draft'"`); `name_get()` → `_compute_display_name`
+- **18.0**: `<tree>` → `<list>` nas vistas; vários métodos e assets renomeados
+- JavaScript/Owl: quase sempre à mão
+
+Testa cada módulo migrado na versão de destino antes de migrar a BD:
+`ODOO_VERSION=18.0` no `.env` → `make up` → `make install MODULE=minha_app`.
+
+### 7.2 Migrar a base de dados
+
+```bash
+make migrate DB=prod TO=17.0             # da versão do .env (ex.: 16.0) para a 17.0
+make migrate DB=prod TO=18.0             # encadeia: 16.0 → 17.0 → 18.0
+make migrate DB=prod TO=18.0 SWITCH=1    # …e no fim muda o .env e sobe o ambiente 18.0
+```
+
+Para cada passo, o `make migrate`:
+
+1. faz um backup da BD na versão actual (`backups/prod_antes-de-17.0.zip` —
+   o teu ponto de retorno);
+2. obtém o OpenUpgrade dessa versão (`migrations/openupgrade-17.0/`);
+3. restaura a BD no ambiente isolado da versão seguinte;
+4. corre `odoo -u all` com os scripts de migração (log em `migrations/`).
+
+A BD original na versão antiga **fica intacta** — a migrada vive no ambiente
+da versão nova. Sem `SWITCH=1`, no fim dizes tu quando mudar:
+`ODOO_VERSION=17.0` e `ODOO_DB=prod` no `.env` → `make up`.
+
+> **Requisitos e limites**
+> - Os módulos custom instalados na BD **têm de existir já migrados** em
+>   `addons/` para a versão de destino — senão o `-u all` falha (ou deixa-os
+>   de fora). Alternativa: desinstalá-los antes de migrar.
+> - O OpenUpgrade só cobre módulos Community (e nem todos os da OCA). Não
+>   migra módulos Enterprise — para esses só o serviço oficial.
+> - Funciona a partir da 14.0 (quando o OpenUpgrade passou a scripts sobre o
+>   Odoo oficial).
+> - Migração é trabalho sério: faz sempre um ensaio numa cópia, verifica os
+>   dados na versão nova e só depois migra a BD real.
+
+### 7.3 Serviço oficial da Odoo (Enterprise)
+
+```bash
+make migrate-odoo DB=prod TO=17.0                 # ensaio (MODE=test)
+make migrate-odoo DB=prod TO=17.0 MODE=production
+```
+
+Corre o script oficial de `upgrade.odoo.com` dentro do container: a BD é
+enviada à Odoo, migrada nos servidores deles e devolvida para o mesmo
+Postgres. Requer subscrição Enterprise válida; segue as mensagens do script.
+Para usar a BD devolvida na versão nova: `make backup DB=<nome devolvido>` e
+depois, com `ODOO_VERSION` da versão nova no `.env`, `make restore FILE=…`.
+
+## 8. Variáveis do `.env`
 
 | Variável | Default | Descrição |
 |---|---|---|
@@ -195,7 +274,7 @@ O `.env` nunca é regenerado — é teu. A precedência é simples: **tudo vem d
 `.env`**; os únicos "parâmetros" de linha de comando são os argumentos por
 operação (`DB=`, `FILE=`, `MODULE=`, `FILESTORE=`, `NEUTRALIZE=`).
 
-## 8. Problemas comuns
+## 9. Problemas comuns
 
 **"porta already in use" ao subir** — outra aplicação usa a porta 8069.
 Muda `ODOO_PORT` no `.env` e corre `make up`.
@@ -212,7 +291,7 @@ pasta `backups/` não são tocadas).
 **Restaurei uma BD e o Odoo dá erros de módulos** — o backup vem de outro
 código/versão: `make update MODULE=all`.
 
-## 9. Notas de segurança
+## 10. Notas de segurança
 
 Este setup é para **desenvolvimento**: credenciais default fracas, tuning
 do Postgres sem durabilidade em crash (`PG_TUNING=1`) e `list_db = True`.

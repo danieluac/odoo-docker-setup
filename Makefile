@@ -29,7 +29,10 @@ comma := ,
 env = $(strip $(shell [ -f $(ENV_FILE) ] && sed -nE 's/^[[:space:]]*$(1)[[:space:]]*=[[:space:]]*//p' $(ENV_FILE) | tail -1))
 
 # ── Configuração (tudo vem do .env) ──────────────────────────────────
-ODOO_VERSION     = $(call env,ODOO_VERSION)
+# _V: override INTERNO da versão (usado pelo make migrate para operar noutro
+# projecto compose sem tocar no .env) — não é para uso na linha de comando.
+_V              ?=
+ODOO_VERSION     = $(or $(_V),$(call env,ODOO_VERSION))
 POSTGRES_VERSION = $(call env,POSTGRES_VERSION)
 ODOO_PORT        = $(call env,ODOO_PORT)
 PGUSER           = $(call env,POSTGRES_USER)
@@ -42,6 +45,16 @@ FILE       ?=
 MODULE     ?=
 FILESTORE  ?= 1
 NEUTRALIZE ?= 1
+# migração: TO=<versão destino>, FROM=<versão origem> (default: a do .env)
+TO         ?=
+FROM       ?=
+SWITCH     ?= 0
+MODE       ?= test
+# internos (usados pelo make migrate nas chamadas recursivas)
+RESTORE_START ?= 1
+BACKUP_NAME   ?=
+OPENUPGRADE_REPO ?= https://github.com/OCA/OpenUpgrade.git
+MIGRATIONS_DIR   := $(ROOT_DIR)/migrations
 DB_FROM_CLI := $(if $(filter command line,$(origin DB)),1,)
 # BD alvo: DB=<nome> na CLI > derivada do FILE (restore) > ODOO_DB do .env
 ifneq ($(origin DB),command line)
@@ -53,7 +66,9 @@ PROJECT = odoo-$(subst .,-,$(ODOO_VERSION))
 COMPOSE_FILES = -f $(ROOT_DIR)/docker-compose.yml \
   $(if $(filter 1,$(call env,PG_TUNING)),-f $(ROOT_DIR)/docker-compose.pg-tuning.yml,) \
   $(if $(ENTERPRISE_DIR),-f $(ROOT_DIR)/docker-compose.enterprise.yml,)
-COMPOSE  = docker compose --project-directory $(ROOT_DIR) -p $(PROJECT) $(COMPOSE_FILES)
+# ODOO_VERSION passado no ambiente: o compose lê o .env, mas uma variável de
+# ambiente tem precedência — assim o override interno _V chega ao compose.
+COMPOSE  = ODOO_VERSION=$(ODOO_VERSION) docker compose --project-directory $(ROOT_DIR) -p $(PROJECT) $(COMPOSE_FILES)
 EXEC_DB  = $(COMPOSE) exec -T db
 PSQL     = $(EXEC_DB) psql -U $(PGUSER)
 # one-off: container descartável do serviço odoo (não mexe no servidor)
@@ -84,6 +99,8 @@ help:  ## Mostra esta ajuda
 	@printf "  make backup DB=outra FILESTORE=0       # backup doutra BD, sem filestore\n"
 	@printf "  make restore FILE=backups/prod.zip     # restaura; a BD 'prod' fica activa\n"
 	@printf "  make scaffold MODULE=minha_app         # cria a estrutura de um módulo novo em addons/\n"
+	@printf "  make migrate DB=prod TO=17.0           # migra a BD 'prod' da versão actual para a 17.0 (OpenUpgrade)\n"
+	@printf "  make migrate-module MODULE=x TO=18.0   # migra o código do módulo x para a 18.0 (semi-automático)\n"
 	@printf "  make debug                             # sobe com debugpy em :5678 (attach do VS Code)\n"
 	@printf "\n$(C_DIM)Configuração (versão do Odoo, porta, credenciais…): edita o .env e corre make up$(C_RESET)\n"
 
@@ -286,7 +303,7 @@ backup: guard check-env conf ensure-image  ## Backup da BD em zip formato Odoo (
 		exit 1
 	fi
 	mkdir -p $(BACKUP_ABS)
-	NAME="$${DBNAME}_$$(date +%Y%m%d_%H%M%S)$(if $(filter 0,$(FILESTORE)),_sem-filestore,).zip"
+	NAME="$(if $(BACKUP_NAME),$(BACKUP_NAME),$${DBNAME}_$$(date +%Y%m%d_%H%M%S)$(if $(filter 0,$(FILESTORE)),_sem-filestore,).zip)"
 	printf "$(C_CYAN)→ a criar backup $$NAME $(if $(filter 0,$(FILESTORE)),(sem filestore),(com filestore)) — pode demorar$(C_RESET)\n"
 	$(EXEC_DB) pg_dump -U $(PGUSER) --no-owner "$$DBNAME" \
 		| $(COMPOSE) run --rm -T --no-deps --user root \
@@ -302,9 +319,10 @@ backup-list: init  ## Lista os backups existentes
 	@ls -lht $(BACKUP_ABS)/*.zip 2>/dev/null || printf "$(C_DIM)(nenhum backup em $(BACKUP_ABS) — cria um com: make backup)$(C_RESET)\n"
 
 .PHONY: restore
-restore: guard check-env conf ensure-image  ## Restaura um backup (FILE=<.zip|.sql|.dump> [DB=nome]) — a BD fica activa
+restore: guard check-env conf  ## Restaura um backup (FILE=<.zip|.sql|.dump> [DB=nome]) — a BD fica activa
 	@test -n "$(FILE)" || { printf "$(C_RED)✗ uso: make restore FILE=backups/<ficheiro>.zip [DB=nome]$(C_RESET)\n"; exit 1; }
 	test -f "$(FILE)" || { printf "$(C_RED)✗ ficheiro não encontrado: $(FILE)$(C_RESET)\n"; exit 1; }
+	$(MAKE) --no-print-directory ensure-image
 	SRC="$$(cd "$$(dirname "$(FILE)")" && pwd)/$$(basename "$(FILE)")"
 	DBNAME="$(DB)"
 	printf "$(C_CYAN)→ restore de $(FILE) para a BD $$DBNAME$(C_RESET)\n"
@@ -347,20 +365,24 @@ restore: guard check-env conf ensure-image  ## Restaura um backup (FILE=<.zip|.s
 		$(PSQL) -d "$$DBNAME" -q -c "UPDATE ir_mail_server SET active = false;" 2>/dev/null || true
 		$(PSQL) -d "$$DBNAME" -q -c "UPDATE fetchmail_server SET active = false;" 2>/dev/null || true
 	fi
-	$(MAKE) --no-print-directory _set-active-db DBSET="$$DBNAME"
-	$(COMPOSE) up -d odoo
-	printf "$(C_GREEN)✓ BD $$DBNAME restaurada e activa$(C_RESET) → http://localhost:$(ODOO_PORT)\n"
-	printf "$(C_DIM)  se o backup vier de outra versão do código: make update MODULE=all$(C_RESET)\n"
-
-# grava ODOO_DB=<DBSET> no .env (BD activa) — sed portável (Linux e macOS)
-.PHONY: _set-active-db
-_set-active-db:
-	@if grep -qE '^[[:space:]]*ODOO_DB[[:space:]]*=' $(ENV_FILE); then
-		sed -E 's/^[[:space:]]*ODOO_DB[[:space:]]*=.*/ODOO_DB=$(DBSET)/' $(ENV_FILE) > $(ENV_FILE).tmp && mv $(ENV_FILE).tmp $(ENV_FILE)
+	if [ "$(RESTORE_START)" = "1" ]; then
+		$(MAKE) --no-print-directory _set-env KEY=ODOO_DB VAL="$$DBNAME"
+		$(COMPOSE) up -d odoo
+		printf "$(C_GREEN)✓ BD $$DBNAME restaurada e activa$(C_RESET) → http://localhost:$(ODOO_PORT)\n"
+		printf "$(C_DIM)  se o backup vier de outra versão do código: make update MODULE=all$(C_RESET)\n"
 	else
-		echo "ODOO_DB=$(DBSET)" >> $(ENV_FILE)
+		printf "$(C_GREEN)✓ BD $$DBNAME restaurada no ambiente Odoo $(ODOO_VERSION)$(C_RESET) $(C_DIM)(servidor não arrancado)$(C_RESET)\n"
 	fi
-	printf "$(C_DIM)— ODOO_DB=$(DBSET) gravado no .env (é agora a BD activa)$(C_RESET)\n"
+
+# grava KEY=VAL no .env (ex.: a BD activa) — sed portável (Linux e macOS)
+.PHONY: _set-env
+_set-env:
+	@if grep -qE '^[[:space:]]*$(KEY)[[:space:]]*=' $(ENV_FILE); then
+		sed -E 's|^[[:space:]]*$(KEY)[[:space:]]*=.*|$(KEY)=$(VAL)|' $(ENV_FILE) > $(ENV_FILE).tmp && mv $(ENV_FILE).tmp $(ENV_FILE)
+	else
+		echo "$(KEY)=$(VAL)" >> $(ENV_FILE)
+	fi
+	printf "$(C_DIM)— $(KEY)=$(VAL) gravado no .env$(C_RESET)\n"
 
 # ═════════════════════════════════════════════════════════════════════
 # Bases de dados
@@ -378,7 +400,7 @@ db-use: guard check-env  ## Muda a BD activa (DB=<nome>) sem restaurar nada
 		printf "$(C_RED)✗ a BD $(DB) não existe$(C_RESET) (make db-list)\n"
 		exit 1
 	fi
-	$(MAKE) --no-print-directory _set-active-db DBSET="$(DB)"
+	$(MAKE) --no-print-directory _set-env KEY=ODOO_DB VAL="$(DB)"
 	$(COMPOSE) up -d odoo
 	printf "$(C_GREEN)✓ BD activa: $(DB)$(C_RESET) → http://localhost:$(ODOO_PORT)\n"
 
@@ -417,16 +439,18 @@ shell: guard check-env  ## Abre o odoo shell na BD activa (o ambiente tem de est
 	@$(COMPOSE) exec odoo odoo shell -d $(DB) --no-http
 
 .PHONY: install
-install: guard check-env conf ensure-image  ## Instala módulo(s): MODULE=a,b,c
+install: guard check-env conf  ## Instala módulo(s): MODULE=a,b,c
 	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make install MODULE=<nome[,nome…]>$(C_RESET)\n"; exit 1; }
+	$(MAKE) --no-print-directory ensure-image
 	$(COMPOSE) up -d --wait db
 	$(RUN_ODOO) odoo -d $(DB) -i $(MODULE) --stop-after-init --log-level info
 	$(COMPOSE) restart odoo 2>/dev/null || true
 	printf "$(C_GREEN)✓ módulo(s) $(MODULE) instalado(s) na BD $(DB)$(C_RESET)\n"
 
 .PHONY: update
-update: guard check-env conf ensure-image  ## Actualiza módulo(s): MODULE=a,b,c ou MODULE=all
+update: guard check-env conf  ## Actualiza módulo(s): MODULE=a,b,c ou MODULE=all
 	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make update MODULE=<nome[,nome…]|all>$(C_RESET)\n"; exit 1; }
+	$(MAKE) --no-print-directory ensure-image
 	$(COMPOSE) up -d --wait db
 	$(RUN_ODOO) odoo -d $(DB) -u $(MODULE) --stop-after-init --log-level info
 	$(COMPOSE) restart odoo 2>/dev/null || true
@@ -483,3 +507,115 @@ scaffold: init  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_d
 	printf "$(C_GREEN)✓ módulo criado em addons/$(MODULE)$(C_RESET)\n"
 	printf "$(C_DIM)  autor: $$AUTHOR · website: $$WEBSITE · versão: $$VERSION$(C_RESET)\n"
 	printf "$(C_DIM)  próximo passo: make install MODULE=$(MODULE)$(C_RESET)\n"
+
+# ═════════════════════════════════════════════════════════════════════
+# Migração de versão
+#
+#   make migrate DB=<bd> TO=<versão>         BD: OpenUpgrade (OCA), Community
+#   make migrate-module MODULE=<m> TO=<v>    código: odoo-module-migrator (OCA)
+#   make migrate-odoo DB=<bd> TO=<versão>    BD: serviço oficial (Enterprise)
+#
+# O Odoo Community não migra BDs entre versões majors sozinho. O OpenUpgrade
+# migra UMA versão de cada vez (16→17→18): para cada passo, restaura a BD no
+# ambiente da versão seguinte e corre `odoo -u all` com os scripts do
+# OpenUpgrade. Os módulos custom instalados na BD TÊM de existir já migrados
+# em addons/ para a versão de destino (make migrate-module) — senão o -u all
+# falha ou deixa-os de fora. Módulos Enterprise não são suportados pelo
+# OpenUpgrade: aí só o serviço oficial (make migrate-odoo).
+# ═════════════════════════════════════════════════════════════════════
+.PHONY: migrate
+migrate: guard check-env  ## Migra uma BD para outra versão via OpenUpgrade (DB=<bd> TO=<versão>; SWITCH=1 activa no fim)
+	@test -n "$(TO)" || { printf "$(C_RED)✗ uso: make migrate DB=<bd> TO=<versão>$(C_RESET) $(C_DIM)(ex.: TO=17.0; FROM=<versão> se não for a do .env)$(C_RESET)\n"; exit 1; }
+	FROM="$(if $(FROM),$(FROM),$(ODOO_VERSION))"
+	DBNAME="$(DB)"
+	for v in "$$FROM" "$(TO)"; do
+		echo "$$v" | grep -qE '^[0-9]+\.0$$' || { printf "$(C_RED)✗ versão inválida: $$v (usa o formato 16.0, 17.0, …)$(C_RESET)\n"; exit 1; }
+	done
+	F=$${FROM%%.*}; T=$$(echo "$(TO)" | cut -d. -f1)
+	[ "$$T" -gt "$$F" ] || { printf "$(C_RED)✗ TO ($(TO)) tem de ser superior a FROM ($$FROM) — o OpenUpgrade não faz downgrade$(C_RESET)\n"; exit 1; }
+	[ "$$F" -ge 14 ] || { printf "$(C_RED)✗ este fluxo (scripts OpenUpgrade sobre o Odoo oficial) só existe a partir da 14.0$(C_RESET)\n"; exit 1; }
+	command -v git >/dev/null 2>&1 || { printf "$(C_RED)✗ git não está instalado (necessário para obter o OpenUpgrade)$(C_RESET)\n"; exit 1; }
+	if [ -n "$(ENTERPRISE_DIR)" ]; then
+		printf "$(C_YELL)! ENTERPRISE_DIR está definido: o OpenUpgrade NÃO migra módulos Enterprise — se a BD os usa, usa make migrate-odoo (serviço oficial)$(C_RESET)\n"
+	fi
+	PLAN="$$FROM"; c=$$F; while [ $$c -lt $$T ]; do c=$$((c+1)); PLAN="$$PLAN → $$c.0"; done
+	printf "$(C_BOLD)Migração da BD $$DBNAME: $$PLAN$(C_RESET)\n"
+	printf "$(C_DIM)  cada passo deixa um backup em $(BACKUP_ABS) (ponto de retorno) e um log em $(MIGRATIONS_DIR)$(C_RESET)\n\n"
+	mkdir -p "$(MIGRATIONS_DIR)"
+	cur=$$F
+	while [ $$cur -lt $$T ]; do
+		CV="$$cur.0"; NV="$$((cur+1)).0"
+		printf "$(C_BOLD)━━ passo $$CV → $$NV ━━$(C_RESET)\n"
+		SNAP="$${DBNAME}_antes-de-$$NV.zip"
+		$(MAKE) --no-print-directory backup _V=$$CV DB=$$DBNAME BACKUP_NAME=$$SNAP
+		OU="$(MIGRATIONS_DIR)/openupgrade-$$NV"
+		if [ ! -d "$$OU/.git" ]; then
+			printf "$(C_CYAN)→ a obter o OpenUpgrade $$NV ($(OPENUPGRADE_REPO))$(C_RESET)\n"
+			git clone --depth 1 -b "$$NV" "$(OPENUPGRADE_REPO)" "$$OU"
+		else
+			git -C "$$OU" pull --ff-only -q 2>/dev/null || true
+		fi
+		$(MAKE) --no-print-directory restore _V=$$NV FILE="$(BACKUP_ABS)/$$SNAP" DB=$$DBNAME RESTORE_START=0
+		$(MAKE) --no-print-directory _migrate-step _V=$$NV DB=$$DBNAME OU="$$OU" LOG="$(MIGRATIONS_DIR)/$${DBNAME}_$$CV-para-$$NV.log"
+		cur=$$((cur+1))
+	done
+	printf "\n$(C_GREEN)✓ BD $$DBNAME migrada para o Odoo $(TO)$(C_RESET) $(C_DIM)(ambiente odoo-$$(echo $(TO) | tr . -); a BD original na $$FROM ficou intacta)$(C_RESET)\n"
+	if [ "$(SWITCH)" = "1" ]; then
+		$(MAKE) --no-print-directory _set-env KEY=ODOO_VERSION VAL="$(TO)"
+		$(MAKE) --no-print-directory _set-env KEY=ODOO_DB VAL="$$DBNAME"
+		$(MAKE) --no-print-directory up
+	else
+		printf "$(C_DIM)  para usar: no .env põe ODOO_VERSION=$(TO) e ODOO_DB=$$DBNAME e corre make up (ou repete com SWITCH=1)$(C_RESET)\n"
+	fi
+
+# um passo de migração: corre odoo -u all com os scripts do OpenUpgrade no
+# ambiente da versão _V (a BD já foi restaurada lá pelo make migrate)
+.PHONY: _migrate-step
+_migrate-step: guard
+	@printf "$(C_CYAN)→ odoo $(ODOO_VERSION): -u all com OpenUpgrade em $(DB) (demora; log: $(LOG))$(C_RESET)\n"
+	$(COMPOSE) up -d --wait db
+	$(COMPOSE) run --rm -T --no-deps -v "$(OU)":/mnt/openupgrade:ro odoo \
+		odoo -d "$(DB)" \
+			--addons-path=/mnt/openupgrade,/mnt/extra-addons \
+			--upgrade-path=/mnt/openupgrade/openupgrade_scripts/scripts \
+			--load=base,web,openupgrade_framework \
+			-u all --stop-after-init --log-level=warn 2>&1 | tee "$(LOG)"
+	test $${PIPESTATUS[0]} -eq 0 || {
+		printf "$(C_RED)✗ a migração para $(ODOO_VERSION) falhou — vê $(LOG)$(C_RESET)\n"
+		printf "$(C_YELL)  causas habituais: módulo custom não migrado para $(ODOO_VERSION) (make migrate-module) ou módulo sem scripts no OpenUpgrade;$(C_RESET)\n"
+		printf "$(C_YELL)  corrige e repete o make migrate — o backup anterior ao passo está em $(BACKUP_ABS)$(C_RESET)\n"
+		exit 1
+	}
+	printf "$(C_GREEN)✓ passo concluído: $(DB) está agora na $(ODOO_VERSION)$(C_RESET)\n"
+
+.PHONY: migrate-module
+migrate-module: guard check-env  ## Migra o CÓDIGO de um módulo entre versões (MODULE=<m> TO=<v> [FROM=<v>]) — semi-automático
+	@test -n "$(MODULE)" && test -n "$(TO)" || { printf "$(C_RED)✗ uso: make migrate-module MODULE=<nome> TO=<versão> [FROM=<versão>]$(C_RESET)\n"; exit 1; }
+	FROM="$(if $(FROM),$(FROM),$(ODOO_VERSION))"
+	test -d "$(ROOT_DIR)/addons/$(MODULE)" || { printf "$(C_RED)✗ addons/$(MODULE) não existe$(C_RESET)\n"; exit 1; }
+	$(MAKE) --no-print-directory ensure-image
+	mkdir -p "$(MIGRATIONS_DIR)"
+	LOG="$(MIGRATIONS_DIR)/$(MODULE)_$$FROM-para-$(TO).log"
+	printf "$(C_CYAN)→ odoo-module-migrator: $(MODULE) $$FROM → $(TO) (altera addons/$(MODULE) no lugar; log: $$LOG)$(C_RESET)\n"
+	printf "$(C_DIM)  faz commit/backup do módulo antes — a ferramenta trata da parte mecânica, o resto é manual$(C_RESET)\n"
+	$(COMPOSE) run --rm -T --no-deps --user root odoo bash -c '\
+		pip3 install -q odoo-module-migrator \
+		&& odoo-module-migrate --directory /mnt/extra-addons --modules $(MODULE) \
+			--init-version-name '"$$FROM"' --target-version-name $(TO) --no-commit; \
+		rc=$$?; chown -R $$(id -u):$$(id -g) /mnt/extra-addons/$(MODULE); exit $$rc' 2>&1 | tee "$$LOG"
+	test $${PIPESTATUS[0]} -eq 0 || { printf "$(C_RED)✗ o migrador falhou — vê $$LOG$(C_RESET)\n"; exit 1; }
+	N=$$(grep -ciE 'warning|todo|manual' "$$LOG" 2>/dev/null || true)
+	printf "$(C_GREEN)✓ parte mecânica feita em addons/$(MODULE)$(C_RESET) $(C_DIM)($$N aviso(s) no log a rever à mão)$(C_RESET)\n"
+	printf "$(C_YELL)  revê o diff e o log; testa com: ODOO_VERSION=$(TO) no .env → make up → make install MODULE=$(MODULE)$(C_RESET)\n"
+
+.PHONY: migrate-odoo
+migrate-odoo: guard check-env  ## Upgrade da BD pelo serviço oficial upgrade.odoo.com (Enterprise; DB=<bd> TO=<v> MODE=test|production)
+	@test -n "$(TO)" || { printf "$(C_RED)✗ uso: make migrate-odoo DB=<bd> TO=<versão> [MODE=test|production]$(C_RESET)\n"; exit 1; }
+	$(MAKE) --no-print-directory ensure-image
+	printf "$(C_CYAN)→ serviço oficial de upgrade (upgrade.odoo.com), modo $(MODE): $(DB) → $(TO)$(C_RESET)\n"
+	printf "$(C_DIM)  requer subscrição Enterprise válida; a BD é enviada para a Odoo — segue as mensagens do script$(C_RESET)\n"
+	$(COMPOSE) up -d --wait db
+	$(COMPOSE) run --rm --no-deps \
+		-e PGHOST=db -e PGUSER=$(PGUSER) -e PGPASSWORD="$(call env,POSTGRES_PASSWORD)" \
+		odoo bash -c 'python3 <(curl -sS https://upgrade.odoo.com/upgrade) $(MODE) -d "$(DB)" -t $(TO)'
+	printf "$(C_DIM)  a BD actualizada fica neste Postgres (ambiente $(ODOO_VERSION)); para a usar na $(TO): make backup DB=<nome-devolvido>, depois no .env ODOO_VERSION=$(TO) → make restore FILE=…$(C_RESET)\n"

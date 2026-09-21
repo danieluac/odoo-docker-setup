@@ -224,3 +224,6 @@ backups/*
 # odoo.conf é gerado pelo make a partir do .env
 config/*
 !config/.gitkeep
+# clones do OpenUpgrade e logs de migração (make migrate / migrate-module)
+migrations/*
+!migrations/.gitkeep
