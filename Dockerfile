@@ -42,27 +42,35 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # deps instaladas com uv (rápido e resolução previsível);
 # watchdog: necessário para o auto-reload (--dev=reload);
-# openupgradelib (master, como a OCA recomenda): necessária ao make migrate (OpenUpgrade)
+# openupgradelib (master, como a OCA recomenda): necessária ao make migrate (OpenUpgrade).
+#
+# Nota: o uv não considera os pacotes Python que a imagem oficial traz via
+# apt (/usr/lib/python3/dist-packages) — qualquer dependência sem versão
+# (ex.: o lxml exigido pela openupgradelib) é instalada de novo, na versão
+# mais recente, em /usr/local, e passa a ser essa que o Odoo importa.
+# lxml-html-clean: a partir do lxml 5.2 o módulo lxml.html.clean (usado pelo
+# Odoo) vive neste pacote separado — é obrigatório em todas as versões.
 RUN pip3 install --no-cache-dir uv \
     && uv pip install --system --break-system-packages --no-cache \
-        -r /tmp/requirements.txt watchdog \
+        -r /tmp/requirements.txt watchdog lxml-html-clean \
         "openupgradelib @ git+https://github.com/OCA/openupgradelib.git@master"
 
 # Odoo 16: o requirements arrasta cryptography recente → o pyOpenSSL e o
 # urllib3 da imagem ficam incompatíveis; urllib3<2 porque o Odoo 16 importa
-# urllib3.contrib.pyopenssl (removido na 2.x). Só se aplica ao 16.
+# urllib3.contrib.pyopenssl (removido na 2.x); lxml<6 porque o Odoo 16 só
+# está validado até ao lxml 5.x (com lxml-html-clean). Só se aplica ao 16.
 ARG ODOO_VERSION
 RUN if [ "${ODOO_VERSION%%.*}" = "16" ]; then \
         uv pip install --system --break-system-packages --no-cache \
-            "pyOpenSSL>=23.2" "urllib3>=1.26.16,<2"; \
+            "pyOpenSSL>=23.2" "urllib3>=1.26.16,<2" "lxml>=5.2,<6"; \
     fi
 
 # Verificação no fim do build: importa o Odoo e as bibliotecas sensíveis a
-# versões (cryptography/pyOpenSSL/urllib3) e as dependências instaladas.
+# versões (cryptography/pyOpenSSL/urllib3/lxml) e as dependências instaladas.
 # Se alguma combinação tiver ficado inconsistente, o build falha AQUI com o
 # erro de import, em vez de o servidor falhar a arrancar mais tarde.
 RUN python3 -c "import importlib, sys; \
-    [importlib.import_module(m) for m in 'OpenSSL cryptography urllib3 requests psycopg2 lxml pandas pyodbc debugpy watchdog odoo.release'.split()]; \
+    [importlib.import_module(m) for m in 'OpenSSL cryptography urllib3 requests psycopg2 lxml lxml.html.clean pandas pyodbc debugpy watchdog odoo odoo.tools.mail odoo.release'.split()]; \
     import odoo.release as r; print('OK: Odoo', r.version, '| Python', sys.version.split()[0])"
 
 USER odoo
