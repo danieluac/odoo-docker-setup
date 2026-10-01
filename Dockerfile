@@ -5,7 +5,8 @@ FROM odoo:${ODOO_VERSION}
 
 USER root
 
-# toolchain para compilar wheels (pyodbc precisa de unixodbc-dev, etc.)
+# toolchain para compilar wheels (pyodbc precisa de unixodbc-dev, etc.);
+# git: necessário para instalar a openupgradelib e para o make migrate-module
 #
 # Debian 11 "bullseye" — base da imagem odoo:16 — saiu do suporte LTS em
 # 2026-08-31. A partir daí o apt da imagem parte: os índices ainda respondem
@@ -32,7 +33,7 @@ RUN set -eux; \
             > /etc/apt/apt.conf.d/99-bullseye-snapshot; \
     fi; \
     apt-get update; \
-    apt-get install -y --no-install-recommends build-essential python3-dev unixodbc-dev; \
+    apt-get install -y --no-install-recommends build-essential python3-dev unixodbc-dev git; \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt
@@ -42,10 +43,12 @@ COPY requirements.txt /tmp/requirements.txt
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # deps instaladas com uv (rápido e resolução previsível);
-# watchdog: necessário para o auto-reload (--dev=reload)
+# watchdog: necessário para o auto-reload (--dev=reload);
+# openupgradelib (master, como a OCA recomenda): necessária ao make migrate (OpenUpgrade)
 RUN pip3 install --no-cache-dir uv \
     && uv pip install --system --break-system-packages --no-cache \
-        -r /tmp/requirements.txt watchdog
+        -r /tmp/requirements.txt watchdog \
+        "openupgradelib @ git+https://github.com/OCA/openupgradelib.git@master"
 
 # Odoo 16: o requirements arrasta cryptography recente → o pyOpenSSL e o
 # urllib3 da imagem ficam incompatíveis; urllib3<2 porque o Odoo 16 importa
