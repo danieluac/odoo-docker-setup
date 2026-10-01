@@ -183,7 +183,7 @@ do debugpy). Para debugar o próprio arranque do servidor, activa
 Se tiveres os addons Enterprise no disco, aponta o `.env` para eles:
 
 ```ini
-ENTERPRISE_DIR=../enterprise-17.0
+ENTERPRISE_DIR=../enterprise-16.0
 ```
 
 e corre `make up`. Vazio = modo Community.
