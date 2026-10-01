@@ -57,4 +57,12 @@ RUN if [ "${ODOO_VERSION%%.*}" = "16" ]; then \
             "pyOpenSSL>=23.2" "urllib3>=1.26.16,<2"; \
     fi
 
+# Verificação no fim do build: importa o Odoo e as bibliotecas sensíveis a
+# versões (cryptography/pyOpenSSL/urllib3) e as dependências instaladas.
+# Se alguma combinação tiver ficado inconsistente, o build falha AQUI com o
+# erro de import, em vez de o servidor falhar a arrancar mais tarde.
+RUN python3 -c "import importlib, sys; \
+    [importlib.import_module(m) for m in 'OpenSSL cryptography urllib3 requests psycopg2 lxml pandas pyodbc debugpy watchdog odoo.release'.split()]; \
+    import odoo.release as r; print('OK: Odoo', r.version, '| Python', sys.version.split()[0])"
+
 USER odoo

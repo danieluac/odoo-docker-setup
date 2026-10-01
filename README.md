@@ -43,8 +43,8 @@ macOS com as Command Line Tools — também serve).
 ## 2. Começar
 
 ```bash
-git clone -b 18.0 <este-repo> odoo-18     # a branch = a versão do Odoo que queres
-cd odoo-18
+git clone -b 16.0 <este-repo> odoo-16     # a branch = a versão do Odoo que queres
+cd odoo-16
 make up
 ```
 
@@ -85,6 +85,13 @@ os mesmos em todas.
 A versão do PostgreSQL por omissão de cada branch cumpre o mínimo exigido
 pela respectiva versão do Odoo. A imagem usada é `pgvector/pgvector:pg<v>`
 (PostgreSQL oficial + extensão `vector`, útil para funcionalidades de IA).
+
+O build da imagem termina sempre com uma **verificação de importação**
+(Odoo, `cryptography`/`pyOpenSSL`/`urllib3`, `psycopg2`, `lxml`, `pandas`,
+`pyodbc`, `debugpy`…): se alguma dependência tiver ficado inconsistente, o
+`make up` pára no build com o erro legível, em vez de o servidor falhar a
+arrancar mais tarde. A última linha do build mostra `OK: Odoo <versão> |
+Python <versão>`.
 
 ### Notas por versão
 
@@ -201,7 +208,7 @@ MODULE_WEBSITE=https://www.example.com
 MODULE_CONTRIBUTORS=Ana Silva, Rui Costa
 ```
 
-A versão do manifesto segue a versão do ambiente (ex.: `18.0.1.0.0`).
+A versão do manifesto segue a versão do ambiente (ex.: `16.0.1.0.0`).
 
 Módulos existentes: coloca-os na pasta `addons/` e:
 
@@ -233,7 +240,7 @@ Se tiveres os addons Enterprise **da mesma versão** no disco, aponta o `.env`
 para eles e corre `make up`:
 
 ```ini
-ENTERPRISE_DIR=../enterprise-18.0
+ENTERPRISE_DIR=../enterprise-16.0
 ```
 
 Vazio = modo Community.
