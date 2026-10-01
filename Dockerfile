@@ -8,15 +8,13 @@ USER root
 # toolchain para compilar wheels (pyodbc precisa de unixodbc-dev, etc.);
 # git: necessário para instalar a openupgradelib e para o make migrate-module
 #
-# Debian 11 "bullseye" — base da imagem odoo:16 — saiu do suporte LTS em
-# 2026-08-31. A partir daí o apt da imagem parte: os índices ainda respondem
-# mas os .deb (sobretudo em bullseye-security) já foram apagados do pool
-# (404), e o archive.debian.org pode ainda não ter a release publicada.
-# Solução: em bullseye, fixar as fontes num snapshot datado do
-# snapshot.debian.org (tem tudo, congelado). Como os ficheiros Release do
-# snapshot já expiraram, desliga-se a validação de data; os retries ajudam
-# com o rate-limit do snapshot. Bookworm+ (Odoo 17/18) não é tocado.
-# Override pontual: docker compose build --build-arg DEBIAN_SNAPSHOT=…
+# Odoo 16: a imagem oficial assenta em Debian 11 "bullseye", cujo suporte
+# terminou em 2026-08-31 — os seus pacotes já não estão nos repositórios
+# correntes do Debian. Em bullseye, as fontes apt são por isso fixadas num
+# snapshot datado do arquivo histórico (snapshot.debian.org). Os ficheiros
+# Release desse arquivo já expiraram (daí Check-Valid-Until=false) e o
+# serviço limita o débito (daí os retries). As imagens Ubuntu (Odoo 17+)
+# não são tocadas. A data vem do .env (DEBIAN_SNAPSHOT) via build arg.
 ARG DEBIAN_SNAPSHOT=20260901T000000Z
 RUN set -eux; \
     if grep -q '^VERSION_CODENAME=bullseye' /etc/os-release; then \
@@ -38,8 +36,8 @@ RUN set -eux; \
 
 COPY requirements.txt /tmp/requirements.txt
 
-# PIP_BREAK_SYSTEM_PACKAGES: necessário nas imagens Debian bookworm+ (PEP 668);
-# ignorado silenciosamente pelo pip antigo das imagens mais velhas.
+# PIP_BREAK_SYSTEM_PACKAGES: necessário nas imagens Ubuntu 24.04 (Odoo 18+),
+# cujo pip aplica a PEP 668; ignorado pelo pip mais antigo das outras imagens.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # deps instaladas com uv (rápido e resolução previsível);
