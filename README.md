@@ -50,7 +50,7 @@ make          # ou: make help
 Edita o `.env` e muda a linha:
 
 ```ini
-ODOO_VERSION=17.0     # → 16.0, 18.0, …
+ODOO_VERSION=16.0     # → 17.0, 18.0, …
 ```
 
 Depois corre `make up`. **Cada versão tem um ambiente completamente
@@ -155,7 +155,7 @@ e corre `make up`. Vazio = modo Community.
 
 | Variável | Default | Descrição |
 |---|---|---|
-| `ODOO_VERSION` | `17.0` | Versão do Odoo (cada versão = ambiente isolado) |
+| `ODOO_VERSION` | `16.0` | Versão do Odoo (cada versão = ambiente isolado) |
 | `POSTGRES_VERSION` | `15` | Versão do Postgres (não mudar com dados existentes) |
 | `ODOO_PORT` | `8069` | Porta HTTP → http://localhost:`porta` |
 | `ODOO_DB` | `odoo` | BD activa (gerida pelo `make restore`/`db-use`) |
