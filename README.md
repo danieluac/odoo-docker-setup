@@ -43,8 +43,8 @@ macOS com as Command Line Tools — também serve).
 ## 2. Começar
 
 ```bash
-git clone -b 16.0 <este-repo> odoo-16     # a branch = a versão do Odoo que queres
-cd odoo-16
+git clone -b 17.0 <este-repo> odoo-17     # a branch = a versão do Odoo que queres
+cd odoo-17
 make up
 ```
 
@@ -208,7 +208,7 @@ MODULE_WEBSITE=https://www.example.com
 MODULE_CONTRIBUTORS=Ana Silva, Rui Costa
 ```
 
-A versão do manifesto segue a versão do ambiente (ex.: `16.0.1.0.0`).
+A versão do manifesto segue a versão do ambiente (ex.: `17.0.1.0.0`).
 
 Módulos existentes: coloca-os na pasta `addons/` e:
 
@@ -240,7 +240,7 @@ Se tiveres os addons Enterprise **da mesma versão** no disco, aponta o `.env`
 para eles e corre `make up`:
 
 ```ini
-ENTERPRISE_DIR=../enterprise-16.0
+ENTERPRISE_DIR=../enterprise-17.0
 ```
 
 Vazio = modo Community.

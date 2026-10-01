@@ -1,6 +1,6 @@
 # Imagem Odoo do ambiente: oficial + dependências do requirements.txt.
 # A versão vem do .env (ODOO_VERSION) via build arg — passado pelo compose.
-ARG ODOO_VERSION=16.0
+ARG ODOO_VERSION=17.0
 FROM odoo:${ODOO_VERSION}
 
 USER root
