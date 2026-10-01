@@ -16,11 +16,26 @@ a porta, as credenciais, etc.
 | Ferramenta | Onde obter |
 |---|---|
 | Docker (Desktop no Windows/macOS, Engine no Linux) | https://docs.docker.com/get-docker/ |
-| `make` | já vem no macOS/Linux; no Windows usa WSL2 |
+| `make` | nem sempre vem instalado — ver abaixo |
 | `git` | https://git-scm.com |
 
 > No Windows, trabalha sempre dentro do WSL2 (Ubuntu). O Docker Desktop
 > integra-se com o WSL2 automaticamente.
+
+### Instalar o `make`
+
+Confirma primeiro se já o tens: `make --version`. Se não:
+
+| Sistema | Comando |
+|---|---|
+| Ubuntu / Debian (e WSL2 no Windows) | `sudo apt update && sudo apt install -y make` |
+| Fedora / RHEL / Rocky | `sudo dnf install -y make` |
+| Arch / Manjaro | `sudo pacman -S make` |
+| macOS | `xcode-select --install` (instala as Command Line Tools, que incluem o `make`) — ou `brew install make` |
+| Windows | abre o terminal do **WSL2 (Ubuntu)** e usa a linha do Ubuntu acima; não uses um `make` nativo do Windows |
+
+Depois de instalar, `make --version` deve mostrar "GNU Make 4.x" (ou 3.81 no
+macOS com as Command Line Tools — também serve).
 
 ## 2. Começar
 
@@ -159,8 +174,9 @@ make debug      # sobe o Odoo sob debugpy, à escuta na porta 5678
 
 Depois, no VS Code: `F5` com a configuração **"Odoo"** (já incluída em
 `.vscode/launch.json`). Breakpoints nos módulos em `addons/` funcionam
-directamente. `make up` volta ao modo normal. Para debugar o próprio
-arranque do servidor, activa `ODOO_WAIT=1` no `.env`.
+directamente. `make up` volta ao modo normal (e deixa de publicar a porta
+do debugpy). Para debugar o próprio arranque do servidor, activa
+`ODOO_WAIT=1` no `.env`.
 
 ### Odoo Enterprise (opcional)
 
@@ -172,7 +188,30 @@ ENTERPRISE_DIR=../enterprise-17.0
 
 e corre `make up`. Vazio = modo Community.
 
-## 7. Migrar de versão (ex.: 16 → 17 → 18)
+## 7. Vários ambientes em simultâneo
+
+Cada ambiente é um **projecto Docker** chamado `odoo-<versão>[-<INSTANCE>]`,
+com containers, volumes e bases de dados próprios. Para ter dois a correr ao
+mesmo tempo (ex.: dois clientes, ou duas versões), usa **dois clones do repo**
+(duas pastas), cada um com o seu `.env`:
+
+| | Clone A (`.env`) | Clone B (`.env`) |
+|---|---|---|
+| Porta HTTP | `ODOO_PORT=8069` | `ODOO_PORT=8070` ← tem de ser diferente |
+| Mesma versão do Odoo? | `INSTANCE=cliente-a` | `INSTANCE=cliente-b` ← obrigatório se a versão for igual |
+| Versões diferentes? | `ODOO_VERSION=16.0` | `ODOO_VERSION=18.0` (aqui o `INSTANCE` é opcional) |
+| Debug nos dois ao mesmo tempo? | `ODOO_DEBUG_PORT=5678` | `ODOO_DEBUG_PORT=5679` |
+
+Porquê o `INSTANCE`: sem ele, dois clones com a mesma versão apontam para o
+**mesmo** projecto Docker, e o `make up` de um recria os containers do outro
+com a sua configuração — é o sintoma de "um dos ambientes morre". O `make up`
+agora detecta essa situação e recusa-se a avançar com uma mensagem a explicar
+o que definir.
+
+`make status` mostra o nome do projecto e a pasta a que pertence. Os dados são
+isolados por projecto: o backup/restore de um ambiente nunca toca no outro.
+
+## 8. Migrar de versão (ex.: 16 → 17 → 18)
 
 Primeiro, o que o Odoo permite e o que não permite — para não haver surpresas:
 
@@ -187,7 +226,7 @@ O Odoo Community **não migra bases de dados entre versões sozinho** — o
 OpenUpgrade é a solução open-source da comunidade e funciona passo a passo
 (16→17→18); o `make migrate` encadeia os passos por ti.
 
-### 7.1 Migrar o código dos módulos custom (fazer PRIMEIRO)
+### 8.1 Migrar o código dos módulos custom (fazer PRIMEIRO)
 
 ```bash
 make migrate-module MODULE=minha_app TO=18.0          # da versão do .env para a 18.0
@@ -207,7 +246,7 @@ no log em `migrations/` e no diff — tipicamente:
 Testa cada módulo migrado na versão de destino antes de migrar a BD:
 `ODOO_VERSION=18.0` no `.env` → `make up` → `make install MODULE=minha_app`.
 
-### 7.2 Migrar a base de dados
+### 8.2 Migrar a base de dados
 
 ```bash
 make migrate DB=prod TO=17.0             # da versão do .env (ex.: 16.0) para a 17.0
@@ -238,7 +277,7 @@ da versão nova. Sem `SWITCH=1`, no fim dizes tu quando mudar:
 > - Migração é trabalho sério: faz sempre um ensaio numa cópia, verifica os
 >   dados na versão nova e só depois migra a BD real.
 
-### 7.3 Serviço oficial da Odoo (Enterprise)
+### 8.3 Serviço oficial da Odoo (Enterprise)
 
 ```bash
 make migrate-odoo DB=prod TO=17.0                 # ensaio (MODE=test)
@@ -251,13 +290,14 @@ Postgres. Requer subscrição Enterprise válida; segue as mensagens do script.
 Para usar a BD devolvida na versão nova: `make backup DB=<nome devolvido>` e
 depois, com `ODOO_VERSION` da versão nova no `.env`, `make restore FILE=…`.
 
-## 8. Variáveis do `.env`
+## 9. Variáveis do `.env`
 
 | Variável | Default | Descrição |
 |---|---|---|
 | `ODOO_VERSION` | `16.0` | Versão do Odoo (cada versão = ambiente isolado) |
 | `POSTGRES_VERSION` | `15` | Versão do Postgres (não mudar com dados existentes) |
 | `ODOO_PORT` | `8069` | Porta HTTP → http://localhost:`porta` |
+| `INSTANCE` | vazio | Identificador do ambiente; obrigatório para correr dois clones da mesma versão (§7) |
 | `ODOO_DB` | `odoo` | BD activa (gerida pelo `make restore`/`db-use`) |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` | `odoo`/`odoo` | Credenciais do Postgres |
 | `ADMIN_PASSWD` | `admin` | Master password do gestor de BDs do Odoo |
@@ -274,7 +314,7 @@ O `.env` nunca é regenerado — é teu. A precedência é simples: **tudo vem d
 `.env`**; os únicos "parâmetros" de linha de comando são os argumentos por
 operação (`DB=`, `FILE=`, `MODULE=`, `FILESTORE=`, `NEUTRALIZE=`).
 
-## 9. Problemas comuns
+## 10. Problemas comuns
 
 **"porta already in use" ao subir** — outra aplicação usa a porta 8069.
 Muda `ODOO_PORT` no `.env` e corre `make up`.
@@ -301,7 +341,7 @@ a funcionar sem fazeres nada. Se o snapshot estiver lento ou a dar erro
 outra data no `.env` (`DEBIAN_SNAPSHOT=20260815T000000Z`) e volta a correr
 `make up`. As versões 17/18 (bookworm) não são afectadas.
 
-## 10. Notas de segurança
+## 11. Notas de segurança
 
 Este setup é para **desenvolvimento**: credenciais default fracas, tuning
 do Postgres sem durabilidade em crash (`PG_TUNING=1`) e `list_db = True`.

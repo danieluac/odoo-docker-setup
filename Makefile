@@ -61,8 +61,11 @@ ifneq ($(origin DB),command line)
 DB = $(or $(if $(FILE),$(basename $(notdir $(FILE)))),$(call env,ODOO_DB))
 endif
 
-# ── docker compose: um projecto por versão → ambientes isolados ──────
-PROJECT = odoo-$(subst .,-,$(ODOO_VERSION))
+# ── docker compose: um projecto por versão (e por INSTANCE) → ambientes isolados ──
+# odoo-<versão>[-<INSTANCE>]: sem INSTANCE, dois clones deste repo com a mesma
+# versão partilhariam o projecto e o `make up` de um recriava os containers do outro.
+INSTANCE = $(call env,INSTANCE)
+PROJECT  = odoo-$(subst .,-,$(ODOO_VERSION))$(if $(INSTANCE),-$(INSTANCE),)
 COMPOSE_FILES = -f $(ROOT_DIR)/docker-compose.yml \
   $(if $(filter 1,$(call env,PG_TUNING)),-f $(ROOT_DIR)/docker-compose.pg-tuning.yml,) \
   $(if $(ENTERPRISE_DIR),-f $(ROOT_DIR)/docker-compose.enterprise.yml,)
@@ -132,6 +135,23 @@ check-env: init
 		fi
 	done
 	[ $$missing -eq 0 ] || { printf "$(C_DIM)  compara o teu .env com o .env.example$(C_RESET)\n"; exit 1; }
+	inst="$(call env,INSTANCE)"
+	echo "$$inst" | grep -qE '^[a-z0-9_-]*$$' || { printf "$(C_RED)✗ INSTANCE inválido no .env ('$$inst'): usa só minúsculas, dígitos, - e _$(C_RESET)\n"; exit 1; }
+
+# impede que este clone tome conta de um projecto compose já usado por OUTRA
+# pasta (mesma versão sem INSTANCE) — o `up` recriaria os containers dela
+.PHONY: _check-project
+_check-project: guard check-env
+	@cid=$$($(COMPOSE) ps -aq 2>/dev/null | head -1)
+	if [ -n "$$cid" ]; then
+		owner=$$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$$cid" 2>/dev/null || true)
+		if [ -n "$$owner" ] && [ "$$owner" != "$(ROOT_DIR)" ]; then
+			printf "$(C_RED)✗ o projecto Docker '$(PROJECT)' já pertence a outra pasta:$(C_RESET) $$owner\n"
+			printf "$(C_YELL)  continuar iria recriar (matar) os containers desse ambiente.$(C_RESET)\n"
+			printf "$(C_YELL)  Para ter os dois a correr: no .env desta pasta define INSTANCE=<nome> e uma ODOO_PORT diferente.$(C_RESET)\n"
+			exit 1
+		fi
+	fi
 
 # ── Templates do make scaffold (placeholders @X@ substituídos na receita) ──
 define SCAFFOLD_MANIFEST
@@ -236,7 +256,7 @@ ensure-image: guard check-env
 # Ambiente
 # ═════════════════════════════════════════════════════════════════════
 .PHONY: up
-up: guard check-env conf  ## Sobe o ambiente completo (Odoo + Postgres) — 1ª vez demora
+up: guard check-env conf _check-project  ## Sobe o ambiente completo (Odoo + Postgres) — 1ª vez demora
 	@printf "$(C_CYAN)→ a construir a imagem Odoo $(ODOO_VERSION) (rápido se nada mudou)$(C_RESET)\n"
 	$(COMPOSE) build odoo
 	printf "$(C_CYAN)→ a subir o Postgres$(C_RESET)\n"
@@ -250,10 +270,10 @@ up: guard check-env conf  ## Sobe o ambiente completo (Odoo + Postgres) — 1ª 
 	printf "\n$(C_GREEN)✓ ambiente pronto$(C_RESET) → $(C_BOLD)http://localhost:$(ODOO_PORT)$(C_RESET)  (Odoo $(ODOO_VERSION) · BD: $(DB) · login: admin / admin)\n"
 
 .PHONY: debug
-debug: guard check-env conf ensure-image  ## Sobe com debugpy à escuta (attach do VS Code, config "Odoo")
+debug: guard check-env conf ensure-image _check-project  ## Sobe com debugpy à escuta (attach do VS Code, config "Odoo")
 	@printf "$(C_CYAN)→ a subir em modo debug (debugpy em :$(call env,ODOO_DEBUG_PORT), sem auto-reload)$(C_RESET)\n"
 	$(COMPOSE) up -d --wait db
-	ODOO_DEBUG=1 ODOO_DEV=qweb,xml $(COMPOSE) up -d odoo
+	ODOO_DEBUG=1 ODOO_DEV=qweb,xml $(COMPOSE) -f $(ROOT_DIR)/docker-compose.debug.yml up -d odoo
 	printf "$(C_GREEN)✓ debugpy à escuta em :$(call env,ODOO_DEBUG_PORT)$(C_RESET) — attach pelo VS Code (F5, config \"Odoo\")\n"
 	printf "$(C_DIM)  nota: o auto-reload fica desligado em debug; make up volta ao modo normal$(C_RESET)\n"
 
@@ -279,6 +299,7 @@ logs-db: guard init  ## Segue os logs do Postgres
 status: guard init  ## Estado do ambiente (versão, BD activa, containers)
 	@printf "$(C_BOLD)Ambiente$(C_RESET)\n"
 	printf "  $(C_DIM)Odoo:$(C_RESET)      $(ODOO_VERSION)\n"
+	printf "  $(C_DIM)Projecto:$(C_RESET)  $(PROJECT) $(C_DIM)(pasta: $(ROOT_DIR))$(C_RESET)\n"
 	printf "  $(C_DIM)BD activa:$(C_RESET) $(call env,ODOO_DB)\n"
 	printf "  $(C_DIM)URL:$(C_RESET)       http://localhost:$(ODOO_PORT)\n"
 	printf "\n$(C_BOLD)Containers$(C_RESET)\n"
