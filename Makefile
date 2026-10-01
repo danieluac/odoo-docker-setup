@@ -68,7 +68,8 @@ INSTANCE = $(call env,INSTANCE)
 PROJECT  = odoo-$(subst .,-,$(ODOO_VERSION))$(if $(INSTANCE),-$(INSTANCE),)
 COMPOSE_FILES = -f $(ROOT_DIR)/docker-compose.yml \
   $(if $(filter 1,$(call env,PG_TUNING)),-f $(ROOT_DIR)/docker-compose.pg-tuning.yml,) \
-  $(if $(ENTERPRISE_DIR),-f $(ROOT_DIR)/docker-compose.enterprise.yml,)
+  $(if $(ENTERPRISE_DIR),-f $(ROOT_DIR)/docker-compose.enterprise.yml,) \
+  $(if $(call env,POSTGRES_PORT),-f $(ROOT_DIR)/docker-compose.db-port.yml,)
 # ODOO_VERSION passado no ambiente: o compose lê o .env, mas uma variável de
 # ambiente tem precedência — assim o override interno _V chega ao compose.
 COMPOSE  = ODOO_VERSION=$(ODOO_VERSION) docker compose --project-directory $(ROOT_DIR) -p $(PROJECT) $(COMPOSE_FILES)
@@ -302,6 +303,7 @@ status: guard init  ## Estado do ambiente (versão, BD activa, containers)
 	printf "  $(C_DIM)Projecto:$(C_RESET)  $(PROJECT) $(C_DIM)(pasta: $(ROOT_DIR))$(C_RESET)\n"
 	printf "  $(C_DIM)BD activa:$(C_RESET) $(call env,ODOO_DB)\n"
 	printf "  $(C_DIM)URL:$(C_RESET)       http://localhost:$(ODOO_PORT)\n"
+	printf "  $(C_DIM)Postgres:$(C_RESET)  $(if $(call env,POSTGRES_PORT),localhost:$(call env,POSTGRES_PORT),só na rede Docker — make psql; POSTGRES_PORT no .env para publicar)\n"
 	printf "\n$(C_BOLD)Containers$(C_RESET)\n"
 	$(COMPOSE) ps
 
@@ -478,7 +480,7 @@ update: guard check-env conf  ## Actualiza módulo(s): MODULE=a,b,c ou MODULE=al
 	printf "$(C_GREEN)✓ módulo(s) $(MODULE) actualizado(s) na BD $(DB)$(C_RESET)\n"
 
 .PHONY: scaffold
-scaffold: init  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_do_modulo)
+scaffold: check-env  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_do_modulo)
 	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make scaffold MODULE=<nome_do_modulo>$(C_RESET) $(C_DIM)(minúsculas e _, ex.: minha_app)$(C_RESET)\n"; exit 1; }
 	echo "$(MODULE)" | grep -qE '^[a-z][a-z0-9_]*$$' || { printf "$(C_RED)✗ nome inválido: usa minúsculas, números e _ (ex.: minha_app)$(C_RESET)\n"; exit 1; }
 	DIR=$(ROOT_DIR)/addons/$(MODULE)
@@ -504,7 +506,7 @@ scaffold: init  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_d
 	# minha_app → "Minha App" (nome apresentável) e "MinhaApp" (classe python)
 	TITLE="$$(echo "$(MODULE)" | awk -F_ '{for(i=1;i<=NF;i++){$$i=toupper(substr($$i,1,1)) substr($$i,2)}}1')"
 	CLASS="$$(echo "$$TITLE" | tr -d ' ')"
-	VERSION="$$( [ -n "$(ODOO_VERSION)" ] && echo "$(ODOO_VERSION)" || echo 17.0 ).1.0.0"
+	VERSION="$(ODOO_VERSION).1.0.0"
 	# substitui os placeholders @X@ dos templates (bash puro — sem problemas de escaping)
 	render() {
 		local t="$$1"

@@ -1,0 +1,7 @@
+# Incluído automaticamente pelo Makefile quando POSTGRES_PORT está definido no
+# .env: publica o PostgreSQL na máquina (DBeaver, pgAdmin, psql local…).
+# Sem POSTGRES_PORT a base de dados só é alcançável dentro da rede Docker.
+services:
+  db:
+    ports:
+      - "${POSTGRES_PORT}:5432"
