@@ -1,15 +1,40 @@
 # Imagem Odoo do ambiente: oficial + dependências do requirements.txt.
 # A versão vem do .env (ODOO_VERSION) via build arg — passado pelo compose.
-ARG ODOO_VERSION=17.0
+ARG ODOO_VERSION=16.0
 FROM odoo:${ODOO_VERSION}
 
 USER root
 
 # toolchain para compilar wheels (pyodbc precisa de unixodbc-dev, etc.);
 # git: necessário para instalar a openupgradelib e para o make migrate-module
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3-dev unixodbc-dev git \
-    && rm -rf /var/lib/apt/lists/*
+#
+# Debian 11 "bullseye" — base da imagem odoo:16 — saiu do suporte LTS em
+# 2026-08-31. A partir daí o apt da imagem parte: os índices ainda respondem
+# mas os .deb (sobretudo em bullseye-security) já foram apagados do pool
+# (404), e o archive.debian.org pode ainda não ter a release publicada.
+# Solução: em bullseye, fixar as fontes num snapshot datado do
+# snapshot.debian.org (tem tudo, congelado). Como os ficheiros Release do
+# snapshot já expiraram, desliga-se a validação de data; os retries ajudam
+# com o rate-limit do snapshot. Bookworm+ (Odoo 17/18) não é tocado.
+# Override pontual: docker compose build --build-arg DEBIAN_SNAPSHOT=…
+ARG DEBIAN_SNAPSHOT=20260901T000000Z
+RUN set -eux; \
+    if grep -q '^VERSION_CODENAME=bullseye' /etc/os-release; then \
+        SNAP="http://snapshot.debian.org/archive"; \
+        printf '%s\n' \
+            "deb ${SNAP}/debian/${DEBIAN_SNAPSHOT} bullseye main" \
+            "deb ${SNAP}/debian/${DEBIAN_SNAPSHOT} bullseye-updates main" \
+            "deb ${SNAP}/debian-security/${DEBIAN_SNAPSHOT} bullseye-security main" \
+            > /etc/apt/sources.list; \
+        rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
+        printf '%s\n' \
+            'Acquire::Check-Valid-Until "false";' \
+            'Acquire::Retries "5";' \
+            > /etc/apt/apt.conf.d/99-bullseye-snapshot; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends build-essential python3-dev unixodbc-dev git; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt
 
