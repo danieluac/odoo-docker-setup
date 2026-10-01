@@ -35,6 +35,8 @@ services:
       dockerfile: Dockerfile
       args:
         ODOO_VERSION: ${ODOO_VERSION:?define ODOO_VERSION no .env — corre `make init`}
+        # só relevante para o Odoo 16 (Debian bullseye EOL) — ver Dockerfile
+        DEBIAN_SNAPSHOT: ${DEBIAN_SNAPSHOT:-20260901T000000Z}
     image: odoo-custom:${ODOO_VERSION}
     # --database/--db-filter amarram o servidor à BD activa (ODOO_DB no .env;
     # o make restore/db-use actualizam-na automaticamente).

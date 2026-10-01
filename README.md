@@ -65,7 +65,7 @@ make          # ou: make help
 Edita o `.env` e muda a linha:
 
 ```ini
-ODOO_VERSION=17.0     # → 16.0, 18.0, …
+ODOO_VERSION=16.0     # → 17.0, 18.0, …
 ```
 
 Depois corre `make up`. **Cada versão tem um ambiente completamente
@@ -194,7 +194,7 @@ isolados por projecto: o backup/restore de um ambiente nunca toca no outro.
 
 | Variável | Default | Descrição |
 |---|---|---|
-| `ODOO_VERSION` | `17.0` | Versão do Odoo (cada versão = ambiente isolado) |
+| `ODOO_VERSION` | `16.0` | Versão do Odoo (cada versão = ambiente isolado) |
 | `POSTGRES_VERSION` | `15` | Versão do Postgres (não mudar com dados existentes) |
 | `ODOO_PORT` | `8069` | Porta HTTP → http://localhost:`porta` |
 | `INSTANCE` | vazio | Identificador do ambiente; obrigatório para correr dois clones da mesma versão (§7) |
@@ -229,6 +229,16 @@ pasta `backups/` não são tocadas).
 
 **Restaurei uma BD e o Odoo dá erros de módulos** — o backup vem de outro
 código/versão: `make update MODULE=all`.
+
+**Odoo 16: o build falha no `apt-get` com 404 / "Release file expired"** —
+a imagem `odoo:16` assenta em Debian 11 (bullseye), que saiu do suporte em
+Agosto de 2026; os pacotes deixaram de estar nos mirrors normais. O
+`Dockerfile` detecta bullseye e fixa o apt num snapshot datado do
+`snapshot.debian.org`, por isso o `make up` com `ODOO_VERSION=16.0` continua
+a funcionar sem fazeres nada. Se o snapshot estiver lento ou a dar erro
+(é um serviço com rate-limit), repete o `make up`; se persistir, experimenta
+outra data no `.env` (`DEBIAN_SNAPSHOT=20260815T000000Z`) e volta a correr
+`make up`. As versões 17/18 (bookworm) não são afectadas.
 
 ## 10. Notas de segurança
 
