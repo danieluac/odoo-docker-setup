@@ -62,8 +62,8 @@ services:
       - odoo-data:/var/lib/odoo
     ports:
       - "${ODOO_PORT:?define ODOO_PORT no .env}:8069"
-      # porta do debugpy (só é usada quando ODOO_DEBUG=1 — make debug)
-      - "${ODOO_DEBUG_PORT:?define ODOO_DEBUG_PORT no .env}:5678"
+      # a porta do debugpy só é publicada pelo `make debug` (docker-compose.debug.yml),
+      # para dois ambientes na mesma máquina não colidirem em :5678
     depends_on:
       db:
         condition: service_healthy
