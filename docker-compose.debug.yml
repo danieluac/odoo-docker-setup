@@ -1,0 +1,7 @@
+# Incluído automaticamente pelo `make debug`: publica a porta do debugpy no
+# host (ODOO_DEBUG_PORT do .env). Fica fora do compose base para que dois
+# ambientes na mesma máquina não colidam em :5678 quando não estão em debug.
+services:
+  odoo:
+    ports:
+      - "${ODOO_DEBUG_PORT:?define ODOO_DEBUG_PORT no .env}:5678"
