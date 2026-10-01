@@ -190,6 +190,16 @@ pasta `backups/` não são tocadas).
 **Restaurei uma BD e o Odoo dá erros de módulos** — o backup vem de outro
 código/versão: `make update MODULE=all`.
 
+**Odoo 16: o build falha no `apt-get` com 404 / "Release file expired"** —
+a imagem `odoo:16` assenta em Debian 11 (bullseye), que saiu do suporte em
+Agosto de 2026; os pacotes deixaram de estar nos mirrors normais. O
+`Dockerfile` detecta bullseye e fixa o apt num snapshot datado do
+`snapshot.debian.org`, por isso o `make up` com `ODOO_VERSION=16.0` continua
+a funcionar sem fazeres nada. Se o snapshot estiver lento ou a dar erro
+(é um serviço com rate-limit), repete o `make up`; se persistir, experimenta
+outra data no `.env` (`DEBIAN_SNAPSHOT=20260815T000000Z`) e volta a correr
+`make up`. As versões 17/18 (bookworm) não são afectadas.
+
 ## 9. Notas de segurança
 
 Este setup é para **desenvolvimento**: credenciais default fracas, tuning
