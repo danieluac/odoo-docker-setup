@@ -55,6 +55,14 @@ RUN pip3 install --no-cache-dir uv \
         -r /tmp/requirements.txt watchdog lxml-html-clean \
         "openupgradelib @ git+https://github.com/OCA/openupgradelib.git@master"
 
+# Dependências python dos repos de módulos: o make junta os requirements.txt
+# que encontra em addons/, repos/ e ADDONS_PATHS em config/requirements.addons.txt
+# (gerado sempre, mesmo vazio). Camada própria: muda sem refazer a anterior.
+COPY config/requirements.addons.txt /tmp/requirements.addons.txt
+RUN if grep -qvE '^[[:space:]]*(#|$)' /tmp/requirements.addons.txt; then \
+        uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.addons.txt; \
+    fi
+
 # Odoo 16: o requirements arrasta cryptography recente → o pyOpenSSL e o
 # urllib3 da imagem ficam incompatíveis; urllib3<2 porque o Odoo 16 importa
 # urllib3.contrib.pyopenssl (removido na 2.x); lxml<6 porque o Odoo 16 só

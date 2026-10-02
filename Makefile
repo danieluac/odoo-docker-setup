@@ -75,6 +75,13 @@ addons_name = $(if $(filter-out 1,$(words $(filter $(call _bn,$(1)),$(_ALL_BN)))
 addons_mnt  = /mnt/addons/$(call addons_name,$(1))
 ADDONS_NAMES = $(foreach p,$(ADDONS_PATHS),$(call addons_name,$(p)))
 ADDONS_COMPOSE = $(ROOT_DIR)/config/docker-compose.addons.yml
+# requirements.txt dos repos de módulos → agregados em config/requirements.addons.txt,
+# que o Dockerfile instala no build (make up reconstrói a imagem quando mudam).
+# Em repos/ e addons/: todos os requirements.txt. Em cada pasta de ADDONS_PATHS:
+# o da própria pasta e os das pastas-mãe até à raiz do repo git (é aí que
+# normalmente está).
+ADDONS_REQ = $(ROOT_DIR)/config/requirements.addons.txt
+REPOS_REQ := $(sort $(shell find $(ROOT_DIR)/addons $(REPOS_DIR) -maxdepth 8 -name requirements.txt -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '$(REPOS_DIR)/*/setup/*' 2>/dev/null))
 
 # pares host=container de TODAS as pastas de addons (addons/ do repo primeiro)
 ADDONS_MAP = $(ROOT_DIR)/addons=/mnt/extra-addons \
@@ -181,6 +188,30 @@ init:  ## Cria o .env (a partir do .env.example) e as pastas — idempotente
 	else
 		rm -f $(ADDONS_COMPOSE)
 	fi
+	# dependências python dos repos de módulos → config/requirements.addons.txt
+	# (sempre gerado, mesmo vazio: o Dockerfile faz COPY dele)
+	req_up() {
+		d="$$1"; n=0
+		while :; do
+			[ -f "$$d/requirements.txt" ] && echo "$$d/requirements.txt"
+			n=$$((n+1))
+			if [ -e "$$d/.git" ] || [ "$$d" = "/" ] || [ "$$d" = "$$HOME" ] || [ "$$d" = "$(ROOT_DIR)" ] || [ $$n -ge 6 ]; then break; fi
+			d="$$(dirname "$$d")"
+		done
+	}
+	{
+		echo "# GERADO automaticamente pelo make — NÃO editar."
+		echo "# Junta os requirements.txt encontrados nas pastas de módulos (addons/, repos/,"
+		echo "# ADDONS_PATHS). Instalado na imagem pelo Dockerfile; make up reconstrói quando muda."
+		{ for f in $(REPOS_REQ); do echo "$$f"; done
+		  for p in $(foreach p,$(ADDONS_PATHS),$(call addons_abs,$(p))); do req_up "$$p"; done
+		} | awk '!seen[$$0]++' | while read -r f; do
+			echo; echo "# --- $$f"
+			grep -vE '^[[:space:]]*(#|$$)' "$$f" || true
+		done
+	} > $(ADDONS_REQ).tmp
+	# só substitui se mudou (evita invalidar a cache do build sem necessidade)
+	if ! cmp -s $(ADDONS_REQ).tmp $(ADDONS_REQ) 2>/dev/null; then mv $(ADDONS_REQ).tmp $(ADDONS_REQ); else rm -f $(ADDONS_REQ).tmp; fi
 
 # valida que as variáveis obrigatórias existem e não estão vazias no .env
 .PHONY: check-env
@@ -413,6 +444,9 @@ status: guard init  ## Estado do ambiente (versão, BD activa, containers)
 	printf "\n$(C_BOLD)Pastas de addons$(C_RESET) $(C_DIM)(host → container, pela ordem do addons_path)$(C_RESET)\n"
 	$(if $(ENTERPRISE_DIR),printf "  %s → /mnt/enterprise $(C_DIM)(enterprise)$(C_RESET)\n" "$(ENTERPRISE_DIR)",)
 	for m in $(ADDONS_MAP); do printf "  %s → %s\n" "$${m%%=*}" "$${m#*=}"; done
+	printf "\n$(C_BOLD)Dependências python dos módulos$(C_RESET) $(C_DIM)(requirements.txt instalados na imagem)$(C_RESET)\n"
+	grep '^# --- ' $(ADDONS_REQ) 2>/dev/null | sed 's/^# --- /  /' || true
+	grep -q '^# --- ' $(ADDONS_REQ) 2>/dev/null || printf "  $(C_DIM)(nenhum requirements.txt encontrado)$(C_RESET)\n"
 	printf "\n$(C_BOLD)Containers$(C_RESET)\n"
 	$(COMPOSE) ps
 

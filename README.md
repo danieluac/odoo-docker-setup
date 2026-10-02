@@ -266,6 +266,17 @@ definido), `addons/`, pastas em `repos/` (ordem alfabética), `ADDONS_PATHS`
 host → container. O `make install`, `make update`, `make migrate-module` e o
 debug funcionam em todas elas.
 
+**Dependências Python dos módulos.** Se um repositório de módulos tiver um
+`requirements.txt` (na raiz do repo ou junto dos módulos), as suas
+dependências são instaladas **na imagem**: o `make up` junta todos os
+`requirements.txt` que encontra em `addons/`, `repos/` e nas pastas de
+`ADDONS_PATHS` (e nas pastas-mãe destas até à raiz do repo git) no ficheiro
+gerado `config/requirements.addons.txt`, e o build instala-o numa camada
+própria. Sempre que um desses ficheiros muda, o `make up` seguinte
+reconstrói só essa camada. O `make status` lista os ficheiros encontrados.
+Pacotes só declarados em `external_dependencies` do manifesto não são
+instalados automaticamente — acrescenta-os a um `requirements.txt` do repo.
+
 ### Depuração (VS Code)
 
 ```bash
