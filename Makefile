@@ -82,6 +82,16 @@ ADDONS_COMPOSE = $(ROOT_DIR)/config/docker-compose.addons.yml
 # normalmente está).
 ADDONS_REQ = $(ROOT_DIR)/config/requirements.addons.txt
 REPOS_REQ := $(sort $(shell find $(ROOT_DIR)/addons $(REPOS_DIR) -maxdepth 8 -name requirements.txt -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '$(REPOS_DIR)/*/setup/*' 2>/dev/null))
+# Pacotes que NÃO existem no PyPI — só como pacotes do sistema Ubuntu/Debian.
+# Aparecem em requirements.txt feitos com `pip freeze` no Python do sistema e
+# fariam o build falhar. São retirados da agregação (ficam como comentário
+# "# ignorado:"). Acrescenta outros em ADDONS_REQUIREMENTS_IGNORE no .env.
+REQ_IGNORE_BUILTIN := apturl command-not-found python-apt ubuntu-drivers-common \
+  ubuntu-pro-client ubuntu-advantage-tools unattended-upgrades language-selector \
+  screen-resolution-extra xkit usb-creator cupshelpers defer louis brlapi \
+  systemd-python ufw distro-info apt-xapian-index reportbug python-xapian \
+  nvidia-ml-py3 blinker-compat
+REQ_IGNORE = $(REQ_IGNORE_BUILTIN) $(subst $(comma),$(space),$(call env,ADDONS_REQUIREMENTS_IGNORE))
 
 # pares host=container de TODAS as pastas de addons (addons/ do repo primeiro)
 ADDONS_MAP = $(ROOT_DIR)/addons=/mnt/extra-addons \
@@ -207,7 +217,11 @@ init:  ## Cria o .env (a partir do .env.example) e as pastas — idempotente
 		  for p in $(foreach p,$(ADDONS_PATHS),$(call addons_abs,$(p))); do req_up "$$p"; done
 		} | awk '!seen[$$0]++' | while read -r f; do
 			echo; echo "# --- $$f"
-			grep -vE '^[[:space:]]*(#|$$)' "$$f" || true
+			# nome do pacote normalizado (minúsculas, _→-) comparado com a lista a ignorar
+			grep -vE '^[[:space:]]*(#|$$)' "$$f" | awk -v ign=" $$(echo '$(REQ_IGNORE)' | tr 'A-Z_' 'a-z-') " '{
+				n=$$0; sub(/^[[:space:]]+/,"",n); sub(/[[:space:]]*([=<>!~;@\[ ].*)?$$/,"",n); gsub(/_/,"-",n); n=tolower(n)
+				if (n != "" && index(ign, " " n " ")) print "# ignorado: " $$0; else print
+			}' || true
 		done
 	} > $(ADDONS_REQ).tmp
 	# só substitui se mudou (evita invalidar a cache do build sem necessidade)
