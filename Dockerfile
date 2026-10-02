@@ -55,6 +55,29 @@ RUN pip3 install --no-cache-dir uv \
         -r /tmp/requirements.txt watchdog lxml-html-clean \
         "openupgradelib @ git+https://github.com/OCA/openupgradelib.git@master"
 
+# Dependências python dos repos de módulos: o make junta os requirements.txt
+# que encontra em addons/, repos/ e ADDONS_PATHS em config/requirements.addons.txt
+# (gerado sempre, mesmo vazio). Camada própria: muda sem refazer a anterior.
+# Tolerante: tenta resolver tudo em conjunto; se falhar (pacote inexistente,
+# versão impossível…), instala linha a linha e IGNORA o que não der, listando
+# no fim do build o que ficou de fora (também em /etc/odoo/requirements.ignorados.txt
+# dentro da imagem). A verificação de importação no fim continua a garantir
+# que o Odoo e as bibliotecas críticas ficaram íntegros.
+COPY config/requirements.addons.txt /tmp/requirements.addons.txt
+RUN set -u; R=/tmp/requirements.addons.txt; UV="uv pip install --system --break-system-packages --no-cache"; \
+    if grep -qvE '^[[:space:]]*(#|$)' "$R"; then \
+        if ! $UV -r "$R"; then \
+            echo "### resolução conjunta falhou — a instalar linha a linha (o que não resolver é ignorado)"; \
+            : > /tmp/requirements.ignorados; \
+            grep -vE '^[[:space:]]*(#|$)' "$R" | while IFS= read -r line; do \
+                $UV --quiet "$line" >/dev/null 2>&1 || echo "$line" >> /tmp/requirements.ignorados; \
+            done; \
+            mkdir -p /etc/odoo && cp /tmp/requirements.ignorados /etc/odoo/requirements.ignorados.txt; \
+            echo "### IGNORADOS (não existem no PyPI ou não instalam nesta imagem) — $(wc -l < /tmp/requirements.ignorados) linha(s):"; \
+            cat /tmp/requirements.ignorados; \
+        fi; \
+    fi
+
 # Odoo 16: o requirements arrasta cryptography recente → o pyOpenSSL e o
 # urllib3 da imagem ficam incompatíveis; urllib3<2 porque o Odoo 16 importa
 # urllib3.contrib.pyopenssl (removido na 2.x); lxml<6 porque o Odoo 16 só
