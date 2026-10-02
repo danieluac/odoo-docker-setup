@@ -56,6 +56,11 @@ services:
     volumes:
       # módulos custom: pasta addons/ do repo, editada no host e vista no container
       - ./addons:/mnt/extra-addons
+      # repos/ (ignorada pelo git): clona lá outros repos de módulos — o make
+      # descobre as pastas de addons lá dentro e põe-nas no addons_path
+      - ./repos:/mnt/repos
+      # pastas de addons FORA do setup (ADDONS_PATHS no .env) são montadas em
+      # /mnt/addons/<nome> pelo override gerado config/docker-compose.addons.yml
       # odoo.conf gerado pelo make a partir do .env
       - ./config:/etc/odoo:ro
       # utilitário interno de backup/restore (usado pelo Makefile)
