@@ -208,9 +208,11 @@ MODULE_WEBSITE=https://www.example.com
 MODULE_CONTRIBUTORS=Ana Silva, Rui Costa
 ```
 
-A versão do manifesto segue a versão do ambiente (ex.: `17.0.1.0.0`).
+A versão do manifesto segue a versão do ambiente (ex.: `17.0.1.0.0`). Para
+criar o módulo noutra pasta de addons (ver a secção seguinte), usa
+`IN=<pasta>`, por exemplo `make scaffold MODULE=x IN=repos/seguros/addons`.
 
-Módulos existentes: coloca-os na pasta `addons/` e:
+Módulos existentes: coloca-os numa pasta de addons e:
 
 ```bash
 make install MODULE=meu_modulo     # instala (aceita vários: a,b,c)
@@ -222,17 +224,60 @@ Com `ODOO_DEV=reload,qweb,xml` (o default do `.env`), o servidor reinicia
 sozinho quando um `.py` muda — na maioria dos casos nem precisas do
 `make restart`.
 
+### Módulos de outros repositórios
+
+Os teus módulos vivem normalmente nos seus próprios repositórios git, com a
+estrutura de pastas que tiverem. Há duas formas de os usar sem alterar
+nenhum ficheiro deste setup — assim o `git pull` do setup nunca conflitua
+com nada teu:
+
+**1. A pasta `repos/` (sem configuração).** É ignorada pelo git deste setup.
+Clona lá os repositórios de módulos, com qualquer estrutura interna:
+
+```
+repos/
+├── seguros/            ← git clone do repo "seguros"
+│   └── addons/extra-addons/seguros/   (pasta com módulos)
+└── odoo_global/        ← git clone do repo "odoo_global"
+    └── addons/custom-addons/          (pasta com módulos)
+```
+
+O `make up` (ou `make restart`) descobre automaticamente todas as pastas que
+contêm módulos (pastas com `__manifest__.py` lá dentro) e põe-nas no
+`addons_path`. Abre o setup como raiz do editor: o VS Code detecta cada
+repositório dentro de `repos/` e mostra-os todos no painel *Source Control*
+(configuração incluída em `.vscode/settings.json`).
+
+**2. `ADDONS_PATHS` no `.env` (pastas fora do setup).** Para pastas de addons
+noutro sítio do disco, lista-as separadas por vírgula (absolutas, `~/…` ou
+relativas à raiz do setup), pela ordem de prioridade que o Odoo deve usar:
+
+```ini
+ADDONS_PATHS=../seguros/addons/extra-addons/seguros,../odoo_global/addons/custom-addons
+```
+
+Cada pasta é montada no container em `/mnt/addons/<nome-da-pasta>`. Se a
+pasta não existir, o `make up` pára com um erro claro em vez de arrancar
+sem os módulos.
+
+Em ambos os casos o `addons_path` final fica, por esta ordem: Enterprise (se
+definido), `addons/`, pastas em `repos/` (ordem alfabética), `ADDONS_PATHS`
+(ordem do `.env`). O `make status` lista as pastas em uso e o mapeamento
+host → container. O `make install`, `make update`, `make migrate-module` e o
+debug funcionam em todas elas.
+
 ### Depuração (VS Code)
 
 ```bash
 make debug      # sobe o Odoo sob debugpy, à escuta em ODOO_DEBUG_PORT (5678)
 ```
 
-Depois, no VS Code: `F5` com a configuração **"Odoo"** (incluída em
-`.vscode/launch.json`). Breakpoints nos módulos em `addons/` funcionam
-directamente. Em modo debug o auto-reload fica desligado; `make up` volta ao
-modo normal. Para depurar o próprio arranque do servidor, activa
-`ODOO_WAIT=1` no `.env`.
+Depois, no VS Code: `F5` com a configuração **"Odoo"**. O ficheiro
+`.vscode/launch.json` é gerado pelo `make up`/`make conf` com um
+mapeamento por pasta de addons (`addons/`, `repos/` e `ADDONS_PATHS`), por
+isso os breakpoints funcionam em todos os módulos. Em modo debug o
+auto-reload fica desligado; `make up` volta ao modo normal. Para depurar o
+próprio arranque do servidor, activa `ODOO_WAIT=1` no `.env`.
 
 ### Odoo Enterprise (opcional)
 
@@ -288,8 +333,8 @@ make migrate-module MODULE=minha_app TO=18.0          # da versão do .env para 
 make migrate-module MODULE=minha_app FROM=16.0 TO=17.0
 ```
 
-Corre o `odoo-module-migrator` sobre `addons/minha_app` **no lugar** (faz
-commit antes). Trata do que é mecânico: versão no manifesto, ficheiros
+Corre o `odoo-module-migrator` sobre o módulo **no lugar**, em qualquer das
+pastas de addons (`addons/`, `repos/` ou `ADDONS_PATHS`) — faz commit antes. Trata do que é mecânico: versão no manifesto, ficheiros
 renomeados e substituições conhecidas de cada versão. O que fica para ti está
 no log em `migrations/` e no diff — tipicamente:
 
@@ -322,9 +367,9 @@ da versão nova. Sem `SWITCH=1`, no fim dizes tu quando mudar:
 `ODOO_VERSION=17.0` e `ODOO_DB=prod` no `.env` → `make up`.
 
 > **Requisitos e limites**
-> - Os módulos custom instalados na BD **têm de existir já migrados** em
->   `addons/` para a versão de destino — senão o `-u all` falha (ou deixa-os
->   de fora). Alternativa: desinstalá-los antes de migrar.
+> - Os módulos custom instalados na BD **têm de existir já migrados** numa
+>   pasta de addons para a versão de destino — senão o `-u all` falha (ou
+>   deixa-os de fora). Alternativa: desinstalá-los antes de migrar.
 > - O OpenUpgrade só cobre módulos Community (e nem todos os da OCA). Não
 >   migra módulos Enterprise — para esses só o serviço oficial.
 > - Funciona a partir da 14.0 (quando o OpenUpgrade passou a scripts sobre o
@@ -362,6 +407,7 @@ devolvido>` e depois, no ambiente da versão nova, `make restore FILE=…`.
 | `ODOO_DEV` | `reload,qweb,xml` | Modos dev do Odoo (`none` desactiva) |
 | `ODOO_DEBUG` / `ODOO_WAIT` | — | Debug permanente / esperar pelo VS Code antes de arrancar |
 | `ENTERPRISE_DIR` | vazio | Caminho dos addons Enterprise (vazio = Community) |
+| `ADDONS_PATHS` | vazio | Pastas de addons fora do setup, separadas por vírgula (§7); alternativa sem configuração: pasta `repos/` |
 | `BACKUP_DIR` | `./backups` | Pasta dos backups |
 | `MODULE_AUTHOR` / `MODULE_WEBSITE` / `MODULE_CONTRIBUTORS` | genéricos | Identidade usada no manifesto do `make scaffold` |
 | `PG_TUNING` | `1` | PostgreSQL afinado para desenvolvimento (restores rápidos; nunca em produção) |
