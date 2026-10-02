@@ -277,6 +277,16 @@ reconstrói só essa camada. O `make status` lista os ficheiros encontrados.
 Pacotes só declarados em `external_dependencies` do manifesto não são
 instalados automaticamente — acrescenta-os a um `requirements.txt` do repo.
 
+A instalação é tolerante a `requirements.txt` imperfeitos (por exemplo
+feitos com `pip freeze` no Python do sistema, que trazem pacotes como
+`apturl` ou `python-apt` que não existem no PyPI): esses pacotes de sistema
+são retirados à partida (ficam como `# ignorado:` no ficheiro gerado;
+acrescenta outros em `ADDONS_REQUIREMENTS_IGNORE` no `.env`) e, se mesmo
+assim a resolução conjunta falhar, o build instala linha a linha, salta o
+que não resolver e lista no fim o que ficou de fora. A verificação de
+importação no fim do build continua a garantir que o Odoo arranca. Ainda
+assim, o ideal é cada repo listar só as dependências reais dos módulos.
+
 ### Depuração (VS Code)
 
 ```bash
@@ -419,6 +429,7 @@ devolvido>` e depois, no ambiente da versão nova, `make restore FILE=…`.
 | `ODOO_DEBUG` / `ODOO_WAIT` | — | Debug permanente / esperar pelo VS Code antes de arrancar |
 | `ENTERPRISE_DIR` | vazio | Caminho dos addons Enterprise (vazio = Community) |
 | `ADDONS_PATHS` | vazio | Pastas de addons fora do setup, separadas por vírgula (§7); alternativa sem configuração: pasta `repos/` |
+| `ADDONS_REQUIREMENTS_IGNORE` | vazio | Pacotes a não instalar dos `requirements.txt` dos repos de módulos (§7) |
 | `BACKUP_DIR` | `./backups` | Pasta dos backups |
 | `MODULE_AUTHOR` / `MODULE_WEBSITE` / `MODULE_CONTRIBUTORS` | genéricos | Identidade usada no manifesto do `make scaffold` |
 | `PG_TUNING` | `1` | PostgreSQL afinado para desenvolvimento (restores rápidos; nunca em produção) |
