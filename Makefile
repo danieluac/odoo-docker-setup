@@ -40,9 +40,58 @@ ENTERPRISE_DIR   = $(call env,ENTERPRISE_DIR)
 BACKUP_RAW       = $(call env,BACKUP_DIR)
 BACKUP_ABS       = $(if $(filter /%,$(BACKUP_RAW)),$(BACKUP_RAW),$(abspath $(ROOT_DIR)/$(if $(BACKUP_RAW),$(BACKUP_RAW),backups)))
 
+# ── Módulos de outros repositórios (sem tocar em ficheiros versionados) ──
+# Duas formas, que podem coexistir:
+#
+#  1. repos/ — pasta IGNORADA pelo git dentro do setup. Clona lá os repos de
+#     módulos (qualquer estrutura interna). Toda a pasta é montada em
+#     /mnt/repos e cada pasta que contenha módulos (uma pasta com
+#     __manifest__.py lá dentro) é descoberta automaticamente e entra no
+#     addons_path. Não precisa de configuração nenhuma.
+#
+#  2. ADDONS_PATHS no .env — lista separada por vírgula de pastas de addons
+#     FORA do setup (absolutas, ~/… ou relativas à raiz do repo). Cada uma é
+#     montada em /mnt/addons/<nome> por um override de compose gerado.
+#
+# Ordem no addons_path: enterprise, addons/, repos/ (alfabética), ADDONS_PATHS
+# (pela ordem do .env).
+empty :=
+space := $(empty) $(empty)
+REPOS_DIR := $(ROOT_DIR)/repos
+# pastas de addons dentro de repos/: pais das pastas de módulo (host, absolutas)
+# (ignora .git, node_modules e a pasta setup/ dos repos OCA, que só tem symlinks)
+REPOS_ADDONS := $(sort $(shell [ -d $(REPOS_DIR) ] && find $(REPOS_DIR) -maxdepth 8 -name __manifest__.py -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '$(REPOS_DIR)/*/setup/*' 2>/dev/null | sed -E 's#/[^/]+/__manifest__\.py$$##' | sort -u))
+repos_mnt = $(patsubst $(REPOS_DIR)%,/mnt/repos%,$(1))
+
+ADDONS_PATHS = $(strip $(subst $(comma),$(space),$(call env,ADDONS_PATHS)))
+# caminho absoluto no host (aceita ~/, absoluto ou relativo à raiz do repo)
+addons_abs  = $(abspath $(if $(filter /%,$(1)),$(1),$(if $(filter ~/%,$(1)),$(HOME)/$(patsubst ~/%,%,$(1)),$(ROOT_DIR)/$(1))))
+_bn = $(notdir $(call addons_abs,$(1)))
+_pn = $(notdir $(patsubst %/,%,$(dir $(call addons_abs,$(1)))))
+_ALL_BN = $(foreach p,$(ADDONS_PATHS),$(call _bn,$(p)))
+# nome do mount: o nome da pasta; se duas pastas tiverem o mesmo nome
+# (ex.: a/addons e b/addons), usa <pai>-<pasta> para as distinguir
+addons_name = $(if $(filter-out 1,$(words $(filter $(call _bn,$(1)),$(_ALL_BN)))),$(call _pn,$(1))-$(call _bn,$(1)),$(call _bn,$(1)))
+addons_mnt  = /mnt/addons/$(call addons_name,$(1))
+ADDONS_NAMES = $(foreach p,$(ADDONS_PATHS),$(call addons_name,$(p)))
+ADDONS_COMPOSE = $(ROOT_DIR)/config/docker-compose.addons.yml
+
+# pares host=container de TODAS as pastas de addons (addons/ do repo primeiro)
+ADDONS_MAP = $(ROOT_DIR)/addons=/mnt/extra-addons \
+  $(foreach p,$(REPOS_ADDONS),$(p)=$(call repos_mnt,$(p))) \
+  $(foreach p,$(ADDONS_PATHS),$(call addons_abs,$(p))=$(call addons_mnt,$(p)))
+# addons_path (lado container) pela ordem de prioridade do Odoo
+ADDONS_PATH_CE = $(subst $(space),,$(foreach m,$(ADDONS_MAP),$(comma)$(lastword $(subst =,$(space),$(m)))))
+ADDONS_PATH    = $(if $(ENTERPRISE_DIR),/mnt/enterprise$(ADDONS_PATH_CE),$(patsubst $(comma)%,%,$(ADDONS_PATH_CE)))
+# pathMappings do VS Code: repos/ inteira num só mapeamento
+LAUNCH_MAP = $(ROOT_DIR)/addons=/mnt/extra-addons $(REPOS_DIR)=/mnt/repos \
+  $(foreach p,$(ADDONS_PATHS),$(call addons_abs,$(p))=$(call addons_mnt,$(p)))
+
 # ── Parâmetros por comando (argumentos, não configuração) ────────────
 FILE       ?=
 MODULE     ?=
+# scaffold: pasta de addons de destino (default: addons/ do repo)
+IN         ?=
 FILESTORE  ?= 1
 NEUTRALIZE ?= 1
 # migração: TO=<versão destino>, FROM=<versão origem> (default: a do .env)
@@ -69,7 +118,8 @@ PROJECT  = odoo-$(subst .,-,$(ODOO_VERSION))$(if $(INSTANCE),-$(INSTANCE),)
 COMPOSE_FILES = -f $(ROOT_DIR)/docker-compose.yml \
   $(if $(filter 1,$(call env,PG_TUNING)),-f $(ROOT_DIR)/docker-compose.pg-tuning.yml,) \
   $(if $(ENTERPRISE_DIR),-f $(ROOT_DIR)/docker-compose.enterprise.yml,) \
-  $(if $(call env,POSTGRES_PORT),-f $(ROOT_DIR)/docker-compose.db-port.yml,)
+  $(if $(call env,POSTGRES_PORT),-f $(ROOT_DIR)/docker-compose.db-port.yml,) \
+  $(if $(ADDONS_PATHS),-f $(ADDONS_COMPOSE),)
 # ODOO_VERSION passado no ambiente: o compose lê o .env, mas uma variável de
 # ambiente tem precedência — assim o override interno _V chega ao compose.
 COMPOSE  = ODOO_VERSION=$(ODOO_VERSION) docker compose --project-directory $(ROOT_DIR) -p $(PROJECT) $(COMPOSE_FILES)
@@ -102,11 +152,11 @@ help:  ## Mostra esta ajuda
 	@printf "  make backup                            # backup da BD activa com filestore → backups/\n"
 	@printf "  make backup DB=outra FILESTORE=0       # backup doutra BD, sem filestore\n"
 	@printf "  make restore FILE=backups/prod.zip     # restaura; a BD 'prod' fica activa\n"
-	@printf "  make scaffold MODULE=minha_app         # cria a estrutura de um módulo novo em addons/\n"
+	@printf "  make scaffold MODULE=minha_app         # cria a estrutura de um módulo novo em addons/ (IN=<pasta> noutra)\n"
 	@printf "  make migrate DB=prod TO=17.0           # migra a BD 'prod' da versão actual para a 17.0 (OpenUpgrade)\n"
 	@printf "  make migrate-module MODULE=x TO=18.0   # migra o código do módulo x para a 18.0 (semi-automático)\n"
 	@printf "  make debug                             # sobe com debugpy em :5678 (attach do VS Code)\n"
-	@printf "\n$(C_DIM)Configuração (versão do Odoo, porta, credenciais…): edita o .env e corre make up$(C_RESET)\n"
+	@printf "\n$(C_DIM)Configuração (versão do Odoo, porta, credenciais, pastas de addons…): edita o .env e corre make up$(C_RESET)\n"
 
 # ═════════════════════════════════════════════════════════════════════
 # Pré-requisitos e ficheiros gerados
@@ -123,12 +173,26 @@ init:  ## Cria o .env (a partir do .env.example) e as pastas — idempotente
 		cp $(ROOT_DIR)/.env.example $(ENV_FILE)
 		printf "$(C_GREEN)✓ .env criado a partir do .env.example$(C_RESET) $(C_DIM)(edita-o para mudar versão/porta/credenciais — nunca é sobrescrito)$(C_RESET)\n"
 	fi
-	mkdir -p $(ROOT_DIR)/addons $(ROOT_DIR)/config $(ROOT_DIR)/backups
+	mkdir -p $(ROOT_DIR)/addons $(ROOT_DIR)/config $(ROOT_DIR)/backups $(ROOT_DIR)/repos
+	# override de compose com as pastas ADDONS_PATHS (gerado aqui, no init, para
+	# que TODOS os comandos — down, status, logs… — vejam os mesmos mounts)
+	if [ -n "$(ADDONS_PATHS)" ]; then
+		echo "$$ADDONS_COMPOSE_CONTENT" > $(ADDONS_COMPOSE)
+	else
+		rm -f $(ADDONS_COMPOSE)
+	fi
 
 # valida que as variáveis obrigatórias existem e não estão vazias no .env
 .PHONY: check-env
 check-env: init
 	@missing=0
+	# cada pasta de ADDONS_PATHS tem de existir (senão o Docker montava uma
+	# pasta vazia e os módulos "desapareciam" sem erro)
+	for m in $(ADDONS_MAP); do
+		h="$${m%%=*}"
+		[ -d "$$h" ] || { printf "$(C_RED)✗ pasta de addons não existe: $$h$(C_RESET) $(C_DIM)(ADDONS_PATHS no .env)$(C_RESET)\n"; missing=1; }
+	done
+	[ "$(words $(sort $(ADDONS_NAMES)))" = "$(words $(ADDONS_NAMES))" ] || { printf "$(C_RED)✗ ADDONS_PATHS tem pastas com o mesmo nome e a mesma pasta-mãe — renomeia uma$(C_RESET)\n"; missing=1; }
 	for v in ODOO_VERSION POSTGRES_VERSION ODOO_PORT ODOO_DB POSTGRES_USER POSTGRES_PASSWORD ADMIN_PASSWD ODOO_LOG ODOO_DEV ODOO_DEBUG_PORT; do
 		if ! grep -qE "^[[:space:]]*$$v[[:space:]]*=[[:space:]]*[^[:space:]]" $(ENV_FILE); then
 			printf "$(C_RED)✗ variável $$v em falta ou vazia no .env$(C_RESET)\n"
@@ -229,7 +293,7 @@ db_host = db
 db_port = 5432
 db_user = $(call env,POSTGRES_USER)
 db_password = $(call env,POSTGRES_PASSWORD)
-addons_path = $(if $(ENTERPRISE_DIR),/mnt/enterprise$(comma),)/mnt/extra-addons
+addons_path = $(ADDONS_PATH)
 data_dir = /var/lib/odoo
 workers = 0
 max_cron_threads = 1
@@ -241,9 +305,51 @@ list_db = True
 endef
 export ODOO_CONF_CONTENT
 
+# newline literal (para gerar ficheiros multi-linha com foreach)
+define newline
+
+
+endef
+
+# config/docker-compose.addons.yml — um bind mount por pasta de ADDONS_PATHS.
+# create_host_path:false → se a pasta não existir, falha em vez de montar vazio.
+define ADDONS_COMPOSE_CONTENT
+# GERADO automaticamente pelo make a partir de ADDONS_PATHS no .env — NÃO editar.
+services:
+  odoo:
+    volumes:
+$(subst $(newline)$(space),$(newline),$(foreach p,$(ADDONS_PATHS),      - type: bind$(newline)         source: $(call addons_abs,$(p))$(newline)         target: $(call addons_mnt,$(p))$(newline)         bind:$(newline)           create_host_path: false$(newline)))
+endef
+export ADDONS_COMPOSE_CONTENT
+
+# .vscode/launch.json — attach ao debugpy com um pathMapping por pasta de addons
+define LAUNCH_JSON_CONTENT
+{
+  // GERADO automaticamente pelo make (make up / make conf) — NÃO editar.
+  // Debug Python do Odoo: `make debug` e depois F5 com a configuração "Odoo".
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Odoo",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": { "host": "localhost", "port": $(call env,ODOO_DEBUG_PORT) },
+      "justMyCode": false,
+      "pathMappings": [
+$(subst $(newline)$(space),$(newline),$(foreach m,$(LAUNCH_MAP),        { "localRoot": "$(firstword $(subst =, ,$(m)))", "remoteRoot": "$(lastword $(subst =, ,$(m)))" },$(newline)))]]
+      ]
+    }
+  ]
+}
+endef
+export LAUNCH_JSON_CONTENT
+
 .PHONY: conf
 conf: init
 	@echo "$$ODOO_CONF_CONTENT" > $(ROOT_DIR)/config/odoo.conf
+	mkdir -p $(ROOT_DIR)/.vscode
+	# remove a vírgula do último pathMapping (JSON não aceita vírgula final)
+	echo "$$LAUNCH_JSON_CONTENT" | sed -e ':a' -e 'N' -e '$$!ba' -e 's/},\n\]\]/}/' -e 's/\]\]//' > $(ROOT_DIR)/.vscode/launch.json
 
 # garante que a imagem odoo-custom:<versão> existe (constrói na 1ª vez)
 .PHONY: ensure-image
@@ -304,6 +410,9 @@ status: guard init  ## Estado do ambiente (versão, BD activa, containers)
 	printf "  $(C_DIM)BD activa:$(C_RESET) $(call env,ODOO_DB)\n"
 	printf "  $(C_DIM)URL:$(C_RESET)       http://localhost:$(ODOO_PORT)\n"
 	printf "  $(C_DIM)Postgres:$(C_RESET)  $(if $(call env,POSTGRES_PORT),localhost:$(call env,POSTGRES_PORT),só na rede Docker — make psql; POSTGRES_PORT no .env para publicar)\n"
+	printf "\n$(C_BOLD)Pastas de addons$(C_RESET) $(C_DIM)(host → container, pela ordem do addons_path)$(C_RESET)\n"
+	$(if $(ENTERPRISE_DIR),printf "  %s → /mnt/enterprise $(C_DIM)(enterprise)$(C_RESET)\n" "$(ENTERPRISE_DIR)",)
+	for m in $(ADDONS_MAP); do printf "  %s → %s\n" "$${m%%=*}" "$${m#*=}"; done
 	printf "\n$(C_BOLD)Containers$(C_RESET)\n"
 	$(COMPOSE) ps
 
@@ -480,11 +589,13 @@ update: guard check-env conf  ## Actualiza módulo(s): MODULE=a,b,c ou MODULE=al
 	printf "$(C_GREEN)✓ módulo(s) $(MODULE) actualizado(s) na BD $(DB)$(C_RESET)\n"
 
 .PHONY: scaffold
-scaffold: check-env  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome_do_modulo)
-	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make scaffold MODULE=<nome_do_modulo>$(C_RESET) $(C_DIM)(minúsculas e _, ex.: minha_app)$(C_RESET)\n"; exit 1; }
+scaffold: check-env  ## Cria a estrutura de um módulo novo em addons/ (MODULE=nome; IN=<pasta> para outra pasta de addons)
+	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make scaffold MODULE=<nome_do_modulo> [IN=<pasta de addons>]$(C_RESET) $(C_DIM)(minúsculas e _, ex.: minha_app)$(C_RESET)\n"; exit 1; }
 	echo "$(MODULE)" | grep -qE '^[a-z][a-z0-9_]*$$' || { printf "$(C_RED)✗ nome inválido: usa minúsculas, números e _ (ex.: minha_app)$(C_RESET)\n"; exit 1; }
-	DIR=$(ROOT_DIR)/addons/$(MODULE)
-	test ! -e "$$DIR" || { printf "$(C_RED)✗ addons/$(MODULE) já existe$(C_RESET)\n"; exit 1; }
+	BASE="$(if $(IN),$(call addons_abs,$(IN)),$(ROOT_DIR)/addons)"
+	test -d "$$BASE" || { printf "$(C_RED)✗ a pasta IN=$(IN) não existe$(C_RESET)\n"; exit 1; }
+	DIR="$$BASE/$(MODULE)"
+	test ! -e "$$DIR" || { printf "$(C_RED)✗ $$DIR já existe$(C_RESET)\n"; exit 1; }
 	# garante a identidade no .env (acrescenta os defaults se as chaves faltarem,
 	# p.ex. num .env criado por uma versão anterior do setup)
 	for kv in "MODULE_AUTHOR=A Minha Empresa" "MODULE_WEBSITE=https://www.example.com" "MODULE_CONTRIBUTORS="; do
@@ -527,9 +638,14 @@ scaffold: check-env  ## Cria a estrutura de um módulo novo em addons/ (MODULE=n
 	render "$$SCAFFOLD_VIEWS" > "$$DIR/views/views.xml"
 	echo "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink" > "$$DIR/security/ir.model.access.csv"
 	render "$$SCAFFOLD_README" > "$$DIR/README.md"
-	printf "$(C_GREEN)✓ módulo criado em addons/$(MODULE)$(C_RESET)\n"
+	printf "$(C_GREEN)✓ módulo criado em $$DIR$(C_RESET)\n"
 	printf "$(C_DIM)  autor: $$AUTHOR · website: $$WEBSITE · versão: $$VERSION$(C_RESET)\n"
 	printf "$(C_DIM)  próximo passo: make install MODULE=$(MODULE)$(C_RESET)\n"
+	# pasta nova dentro de repos/ → o addons_path muda; avisa se o servidor já corre
+	if [ -n "$(IN)" ] && [ "$${DIR#$(REPOS_DIR)/}" != "$$DIR" ] && ! echo " $(REPOS_ADDONS) " | grep -q " $$BASE "; then
+		printf "$(C_YELL)  nova pasta de addons em repos/ — corre make restart para o servidor a ver$(C_RESET)\n"
+	fi
+
 
 # ═════════════════════════════════════════════════════════════════════
 # Migração de versão
@@ -599,7 +715,7 @@ _migrate-step: guard
 	$(COMPOSE) up -d --wait db
 	$(COMPOSE) run --rm -T --no-deps -v "$(OU)":/mnt/openupgrade:ro odoo \
 		odoo -d "$(DB)" \
-			--addons-path=/mnt/openupgrade,/mnt/extra-addons \
+			--addons-path=/mnt/openupgrade$(ADDONS_PATH_CE) \
 			--upgrade-path=/mnt/openupgrade/openupgrade_scripts/scripts \
 			--load=base,web,openupgrade_framework \
 			-u all --stop-after-init --log-level=warn 2>&1 | tee "$(LOG)"
@@ -615,20 +731,25 @@ _migrate-step: guard
 migrate-module: guard check-env  ## Migra o CÓDIGO de um módulo entre versões (MODULE=<m> TO=<v> [FROM=<v>]) — semi-automático
 	@test -n "$(MODULE)" && test -n "$(TO)" || { printf "$(C_RED)✗ uso: make migrate-module MODULE=<nome> TO=<versão> [FROM=<versão>]$(C_RESET)\n"; exit 1; }
 	FROM="$(if $(FROM),$(FROM),$(ODOO_VERSION))"
-	test -d "$(ROOT_DIR)/addons/$(MODULE)" || { printf "$(C_RED)✗ addons/$(MODULE) não existe$(C_RESET)\n"; exit 1; }
+	# procura o módulo em todas as pastas de addons (addons/, repos/, ADDONS_PATHS)
+	HOST=""; CONT=""
+	for m in $(ADDONS_MAP); do
+		if [ -d "$${m%%=*}/$(MODULE)" ]; then HOST="$${m%%=*}"; CONT="$${m#*=}"; break; fi
+	done
+	test -n "$$HOST" || { printf "$(C_RED)✗ módulo $(MODULE) não encontrado em nenhuma pasta de addons$(C_RESET) $(C_DIM)(make status lista-as)$(C_RESET)\n"; exit 1; }
 	$(MAKE) --no-print-directory ensure-image
 	mkdir -p "$(MIGRATIONS_DIR)"
 	LOG="$(MIGRATIONS_DIR)/$(MODULE)_$$FROM-para-$(TO).log"
-	printf "$(C_CYAN)→ odoo-module-migrator: $(MODULE) $$FROM → $(TO) (altera addons/$(MODULE) no lugar; log: $$LOG)$(C_RESET)\n"
+	printf "$(C_CYAN)→ odoo-module-migrator: $(MODULE) $$FROM → $(TO) (altera $$HOST/$(MODULE) no lugar; log: $$LOG)$(C_RESET)\n"
 	printf "$(C_DIM)  faz commit/backup do módulo antes — a ferramenta trata da parte mecânica, o resto é manual$(C_RESET)\n"
 	$(COMPOSE) run --rm -T --no-deps --user root odoo bash -c '\
 		pip3 install -q odoo-module-migrator \
-		&& odoo-module-migrate --directory /mnt/extra-addons --modules $(MODULE) \
+		&& odoo-module-migrate --directory '"$$CONT"' --modules $(MODULE) \
 			--init-version-name '"$$FROM"' --target-version-name $(TO) --no-commit; \
-		rc=$$?; chown -R $$(id -u):$$(id -g) /mnt/extra-addons/$(MODULE); exit $$rc' 2>&1 | tee "$$LOG"
+		rc=$$?; chown -R $$(id -u):$$(id -g) '"$$CONT"'/$(MODULE); exit $$rc' 2>&1 | tee "$$LOG"
 	test $${PIPESTATUS[0]} -eq 0 || { printf "$(C_RED)✗ o migrador falhou — vê $$LOG$(C_RESET)\n"; exit 1; }
 	N=$$(grep -ciE 'warning|todo|manual' "$$LOG" 2>/dev/null || true)
-	printf "$(C_GREEN)✓ parte mecânica feita em addons/$(MODULE)$(C_RESET) $(C_DIM)($$N aviso(s) no log a rever à mão)$(C_RESET)\n"
+	printf "$(C_GREEN)✓ parte mecânica feita em $$HOST/$(MODULE)$(C_RESET) $(C_DIM)($$N aviso(s) no log a rever à mão)$(C_RESET)\n"
 	printf "$(C_YELL)  revê o diff e o log; testa com: ODOO_VERSION=$(TO) no .env → make up → make install MODULE=$(MODULE)$(C_RESET)\n"
 
 .PHONY: migrate-odoo
