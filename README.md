@@ -53,7 +53,9 @@ Na primeira execução o `make up`:
 1. cria o `.env` a partir do `.env.example` (podes editá-lo depois);
 2. constrói a imagem do Odoo com as dependências do `requirements.txt`;
 3. sobe o PostgreSQL e o Odoo;
-4. inicializa a base de dados com os módulos base.
+4. inicializa a base de dados com os módulos base — **sem dados de
+   demonstração**, salvo se puseres `ODOO_DEMO=1` no `.env`; e já em modo
+   **Enterprise** se os addons Enterprise estiverem presentes (ver §7).
 
 No fim aparece o endereço: **http://localhost:8069** — login `admin` / `admin`.
 
@@ -302,14 +304,38 @@ próprio arranque do servidor, activa `ODOO_WAIT=1` no `.env`.
 
 ### Odoo Enterprise (opcional)
 
-Se tiveres os addons Enterprise **da mesma versão** no disco, aponta o `.env`
-para eles e corre `make up`:
+Se tiveres os addons Enterprise **da mesma versão** no disco, há duas formas
+de os usar:
+
+- clonar o repositório `enterprise` para `repos/` (detectado sozinho, como
+  qualquer outro repo de módulos), ou
+- apontar o `.env` para a pasta, se estiver noutro sítio:
 
 ```ini
 ENTERPRISE_DIR=../enterprise-16.0
 ```
 
-Vazio = modo Community.
+Em qualquer dos casos o ambiente passa a correr **em modo Enterprise**: o
+`make up` detecta o módulo `web_enterprise` e as bases de dados novas são
+criadas já com ele instalado (interface Enterprise e módulos Enterprise
+disponíveis). O `make status` mostra a edição detectada. Para uma base de
+dados criada antes em modo Community: `make install MODULE=web_enterprise`.
+
+Sem addons Enterprise em lado nenhum = modo Community.
+
+### Dados de demonstração
+
+As bases de dados novas são criadas **sem dados de demonstração**. Para as
+criar com demo (útil para experimentar módulos), põe no `.env`:
+
+```ini
+ODOO_DEMO=1
+```
+
+A opção aplica-se às bases de dados criadas pelo `make up` e aos módulos
+instalados com `make install`; não altera uma base de dados já existente nem
+as restauradas de backup. Para mudar de ideias numa BD já criada, o mais
+simples é criar outra: `make db-use DB=nova` seguido de `make up`.
 
 ## 8. Vários ambientes em simultâneo
 
@@ -426,8 +452,9 @@ devolvido>` e depois, no ambiente da versão nova, `make restore FILE=…`.
 | `ADMIN_PASSWD` | `admin` | Master password do gestor de BDs do Odoo |
 | `ODOO_LOG` | `info` | Nível de log (`debug`, `info`, `warn`, `error`) |
 | `ODOO_DEV` | `reload,qweb,xml` | Modos dev do Odoo (`none` desactiva) |
+| `ODOO_DEMO` | `0` | `1` = BDs novas e `make install` com dados de demonstração (§7) |
 | `ODOO_DEBUG` / `ODOO_WAIT` | — | Debug permanente / esperar pelo VS Code antes de arrancar |
-| `ENTERPRISE_DIR` | vazio | Caminho dos addons Enterprise (vazio = Community) |
+| `ENTERPRISE_DIR` | vazio | Caminho dos addons Enterprise fora do setup (em `repos/` são detectados sozinhos); com Enterprise presente as BDs novas nascem em modo Enterprise (§7) |
 | `ADDONS_PATHS` | vazio | Pastas de addons fora do setup, separadas por vírgula (§7); alternativa sem configuração: pasta `repos/` |
 | `ADDONS_REQUIREMENTS_IGNORE` | vazio | Pacotes a não instalar dos `requirements.txt` dos repos de módulos (§7) |
 | `BACKUP_DIR` | `./backups` | Pasta dos backups |
