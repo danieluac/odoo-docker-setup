@@ -227,3 +227,8 @@ config/*
 # clones do OpenUpgrade e logs de migração (make migrate / migrate-module)
 migrations/*
 !migrations/.gitkeep
+# outros repositórios de módulos (cada um com o seu próprio git)
+repos/*
+!repos/.gitkeep
+# gerado pelo make a partir das pastas de addons (pathMappings do debugpy)
+.vscode/launch.json

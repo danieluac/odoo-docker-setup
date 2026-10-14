@@ -1,0 +1,24 @@
+{
+  // Git: detectar automaticamente os repositórios de módulos clonados em
+  // repos/ (cada um com o seu .git) e mostrá-los todos no painel Source Control.
+  "git.autoRepositoryDetection": true,
+  "git.repositoryScanMaxDepth": 3,
+  "git.repositoryScanIgnoredFolders": [
+    "node_modules",
+    "venv",
+    ".venv",
+    "filestore",
+    "__pycache__",
+    "backups",
+    "migrations"
+  ],
+  "git.openRepositoryInParentFolders": "always",
+  "scm.alwaysShowRepositories": true,
+
+  // ficheiros gerados pelo make (não editar à mão)
+  "files.readonlyInclude": {
+    "config/odoo.conf": true,
+    "config/docker-compose.addons.yml": true,
+    ".vscode/launch.json": true
+  }
+}
