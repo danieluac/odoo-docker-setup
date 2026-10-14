@@ -37,6 +37,23 @@ POSTGRES_VERSION = $(call env,POSTGRES_VERSION)
 ODOO_PORT        = $(call env,ODOO_PORT)
 PGUSER           = $(call env,POSTGRES_USER)
 ENTERPRISE_DIR   = $(call env,ENTERPRISE_DIR)
+ODOO_MAJOR       = $(firstword $(subst ., ,$(ODOO_VERSION)))
+
+# ── Dados de demonstração (ODOO_DEMO no .env; só afecta BDs novas e instalações) ──
+# Até à 18 o Odoo carrega demo por omissão (--without-demo=all desliga);
+# a partir da 19 não carrega (--with-demo liga). A flag certa para a versão:
+ODOO_DEMO   = $(call env,ODOO_DEMO)
+_DEMO_NEWCLI = $(filter 19 2% 3%,$(ODOO_MAJOR))
+DEMO_FLAG   = $(if $(filter 1,$(ODOO_DEMO)),$(if $(_DEMO_NEWCLI),--with-demo,),$(if $(_DEMO_NEWCLI),,--without-demo=all))
+DEMO_LABEL  = $(if $(filter 1,$(ODOO_DEMO)),com dados de demonstração,sem dados de demonstração)
+
+# ── Edição: Enterprise se o módulo web_enterprise existir em ENTERPRISE_DIR ou
+# em qualquer pasta de addons (addons/, repos/, ADDONS_PATHS). Nesse caso as
+# BDs novas são criadas já com web_enterprise instalado.
+ENTERPRISE_ABS   = $(if $(ENTERPRISE_DIR),$(call addons_abs,$(ENTERPRISE_DIR)),)
+ENTERPRISE_FOUND = $(firstword $(wildcard $(foreach d,$(ENTERPRISE_ABS) $(foreach m,$(ADDONS_MAP),$(firstword $(subst =,$(space),$(m)))),$(d)/web_enterprise/__manifest__.py)))
+EDITION      = $(if $(ENTERPRISE_FOUND),Enterprise,Community)
+INIT_MODULES = base$(if $(ENTERPRISE_FOUND),$(comma)web_enterprise,)
 BACKUP_RAW       = $(call env,BACKUP_DIR)
 BACKUP_ABS       = $(if $(filter /%,$(BACKUP_RAW)),$(BACKUP_RAW),$(abspath $(ROOT_DIR)/$(if $(BACKUP_RAW),$(BACKUP_RAW),backups)))
 
@@ -247,6 +264,10 @@ check-env: init
 	[ $$missing -eq 0 ] || { printf "$(C_DIM)  compara o teu .env com o .env.example$(C_RESET)\n"; exit 1; }
 	inst="$(call env,INSTANCE)"
 	echo "$$inst" | grep -qE '^[a-z0-9_-]*$$' || { printf "$(C_RED)✗ INSTANCE inválido no .env ('$$inst'): usa só minúsculas, dígitos, - e _$(C_RESET)\n"; exit 1; }
+	echo "$(ODOO_DEMO)" | grep -qE '^[01]?$$' || { printf "$(C_RED)✗ ODOO_DEMO inválido no .env ('$(ODOO_DEMO)'): usa 0 ou 1$(C_RESET)\n"; exit 1; }
+	if [ -n "$(ENTERPRISE_DIR)" ] && [ ! -f "$(ENTERPRISE_ABS)/web_enterprise/__manifest__.py" ]; then
+		printf "$(C_YELL)! ENTERPRISE_DIR=$(ENTERPRISE_DIR) não contém o módulo web_enterprise — confirma o caminho (e a versão) dos addons Enterprise$(C_RESET)\n"
+	fi
 
 # impede que este clone tome conta de um projecto compose já usado por OUTRA
 # pasta (mesma versão sem INSTANCE) — o `up` recriaria os containers dela
@@ -414,12 +435,12 @@ up: guard check-env conf _check-project  ## Sobe o ambiente completo (Odoo + Pos
 	printf "$(C_CYAN)→ a subir o Postgres$(C_RESET)\n"
 	$(COMPOSE) up -d --wait db
 	if ! $(PSQL) -d "$(DB)" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='ir_module_module'" 2>/dev/null | grep -q 1; then
-		printf "$(C_CYAN)→ BD $(DB) não existe — a inicializar com os módulos base (demora uns minutos)$(C_RESET)\n"
-		$(RUN_ODOO) odoo -d $(DB) -i base --stop-after-init --log-level warn
+		printf "$(C_CYAN)→ BD $(DB) não existe — a inicializar em modo $(EDITION), $(DEMO_LABEL) (demora uns minutos)$(C_RESET)\n"
+		$(RUN_ODOO) odoo -d $(DB) -i $(INIT_MODULES) $(DEMO_FLAG) --stop-after-init --log-level warn
 	fi
 	printf "$(C_CYAN)→ a subir o Odoo$(C_RESET)\n"
 	$(COMPOSE) up -d odoo
-	printf "\n$(C_GREEN)✓ ambiente pronto$(C_RESET) → $(C_BOLD)http://localhost:$(ODOO_PORT)$(C_RESET)  (Odoo $(ODOO_VERSION) · BD: $(DB) · login: admin / admin)\n"
+	printf "\n$(C_GREEN)✓ ambiente pronto$(C_RESET) → $(C_BOLD)http://localhost:$(ODOO_PORT)$(C_RESET)  (Odoo $(ODOO_VERSION) $(EDITION) · BD: $(DB) · login: admin / admin)\n"
 
 .PHONY: debug
 debug: guard check-env conf ensure-image _check-project  ## Sobe com debugpy à escuta (attach do VS Code, config "Odoo")
@@ -450,7 +471,8 @@ logs-db: guard init  ## Segue os logs do Postgres
 .PHONY: status
 status: guard init  ## Estado do ambiente (versão, BD activa, containers)
 	@printf "$(C_BOLD)Ambiente$(C_RESET)\n"
-	printf "  $(C_DIM)Odoo:$(C_RESET)      $(ODOO_VERSION)\n"
+	printf "  $(C_DIM)Odoo:$(C_RESET)      $(ODOO_VERSION) $(EDITION)$(if $(ENTERPRISE_FOUND), $(C_DIM)(web_enterprise em $(patsubst %/web_enterprise/__manifest__.py,%,$(ENTERPRISE_FOUND)))$(C_RESET),)\n"
+	printf "  $(C_DIM)Demo:$(C_RESET)      $(if $(filter 1,$(ODOO_DEMO)),sim,não) $(C_DIM)(ODOO_DEMO — só BDs novas e make install)$(C_RESET)\n"
 	printf "  $(C_DIM)Projecto:$(C_RESET)  $(PROJECT) $(C_DIM)(pasta: $(ROOT_DIR))$(C_RESET)\n"
 	printf "  $(C_DIM)BD activa:$(C_RESET) $(call env,ODOO_DB)\n"
 	printf "  $(C_DIM)URL:$(C_RESET)       http://localhost:$(ODOO_PORT)\n"
@@ -623,7 +645,7 @@ install: guard check-env conf  ## Instala módulo(s): MODULE=a,b,c
 	@test -n "$(MODULE)" || { printf "$(C_RED)✗ uso: make install MODULE=<nome[,nome…]>$(C_RESET)\n"; exit 1; }
 	$(MAKE) --no-print-directory ensure-image
 	$(COMPOSE) up -d --wait db
-	$(RUN_ODOO) odoo -d $(DB) -i $(MODULE) --stop-after-init --log-level info
+	$(RUN_ODOO) odoo -d $(DB) -i $(MODULE) $(DEMO_FLAG) --stop-after-init --log-level info
 	$(COMPOSE) restart odoo 2>/dev/null || true
 	printf "$(C_GREEN)✓ módulo(s) $(MODULE) instalado(s) na BD $(DB)$(C_RESET)\n"
 
@@ -722,8 +744,8 @@ migrate: guard check-env  ## Migra uma BD para outra versão via OpenUpgrade (DB
 	[ "$$T" -gt "$$F" ] || { printf "$(C_RED)✗ TO ($(TO)) tem de ser superior a FROM ($$FROM) — o OpenUpgrade não faz downgrade$(C_RESET)\n"; exit 1; }
 	[ "$$F" -ge 14 ] || { printf "$(C_RED)✗ este fluxo (scripts OpenUpgrade sobre o Odoo oficial) só existe a partir da 14.0$(C_RESET)\n"; exit 1; }
 	command -v git >/dev/null 2>&1 || { printf "$(C_RED)✗ git não está instalado (necessário para obter o OpenUpgrade)$(C_RESET)\n"; exit 1; }
-	if [ -n "$(ENTERPRISE_DIR)" ]; then
-		printf "$(C_YELL)! ENTERPRISE_DIR está definido: o OpenUpgrade NÃO migra módulos Enterprise — se a BD os usa, usa make migrate-odoo (serviço oficial)$(C_RESET)\n"
+	if [ -n "$(ENTERPRISE_FOUND)" ]; then
+		printf "$(C_YELL)! ambiente Enterprise: o OpenUpgrade NÃO migra módulos Enterprise — se a BD os usa, usa make migrate-odoo (serviço oficial)$(C_RESET)\n"
 	fi
 	PLAN="$$FROM"; c=$$F; while [ $$c -lt $$T ]; do c=$$((c+1)); PLAN="$$PLAN → $$c.0"; done
 	printf "$(C_BOLD)Migração da BD $$DBNAME: $$PLAN$(C_RESET)\n"
